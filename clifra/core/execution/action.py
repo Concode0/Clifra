@@ -11,8 +11,13 @@ import torch.nn as nn
 from clifra.core.foundation.basis import expand_output_grades, operation_coefficient
 from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.numerics import eps_like, signed_clamp_min
-from clifra.core.foundation.validation import validate_channel_values
-from clifra.core.runtime.tensors import canonical_values, metric_self_signs
+from clifra.core.runtime.tensors import (
+    TensorContract,
+    _check_contract_spec,
+    canonical_values,
+    metric_self_signs,
+    resolve_contract,
+)
 
 
 class GradedLinearActionExecutor(nn.Module):
@@ -20,10 +25,14 @@ class GradedLinearActionExecutor(nn.Module):
 
     def __init__(self, *, input_layout: GradeLayout, output_layout: GradeLayout):
         super().__init__()
-        if input_layout.spec != output_layout.spec:
-            raise ValueError(f"layout mismatch: {input_layout.spec} vs {output_layout.spec}")
-        self.input_layout = input_layout
-        self.output_layout = output_layout
+        self.input_contract = TensorContract.compact(input_layout.spec, input_layout)
+        self.output_contract = _check_contract_spec(
+            self.input_contract.spec,
+            TensorContract.compact(output_layout.spec, output_layout),
+            "output_layout",
+        )
+        self.input_layout = self.input_contract.layout
+        self.output_layout = self.output_contract.layout
         self.input_dim = input_layout.dim
         self.output_dim = output_layout.dim
         self.n = input_layout.spec.n
@@ -98,10 +107,9 @@ class GradedLinearActionExecutor(nn.Module):
         return flat.reshape(matrices.shape[0], self.output_dim, self.input_dim)
 
     def _check_values(self, values: torch.Tensor) -> None:
-        if values.shape[-1] != self.input_dim:
-            raise ValueError(f"input dimension must be {self.input_dim}, got {values.shape[-1]}")
         if values.ndim < 2:
             raise ValueError(f"values must include channel and lane axes, got shape {tuple(values.shape)}")
+        self.input_contract.validate(values, name="values")
 
 
 class BivectorVectorGeneratorExecutor(nn.Module):
@@ -109,6 +117,8 @@ class BivectorVectorGeneratorExecutor(nn.Module):
 
     def __init__(self, *, bivector_layout: GradeLayout, dtype: torch.dtype = torch.float32, device=None):
         super().__init__()
+        self.bivector_contract = TensorContract.compact(bivector_layout.spec, bivector_layout)
+        bivector_layout = self.bivector_contract.layout
         if bivector_layout.grades != (2,):
             raise ValueError(f"bivector_layout must contain grade 2 only, got {bivector_layout.grades}")
         self.bivector_layout = bivector_layout
@@ -147,8 +157,7 @@ class BivectorVectorGeneratorExecutor(nn.Module):
 
     def forward(self, bivectors: torch.Tensor) -> torch.Tensor:
         """Return vector-space generator matrices for bivectors."""
-        if bivectors.shape[-1] != self.bivector_layout.dim:
-            raise ValueError(f"bivector dimension must be {self.bivector_layout.dim}, got {bivectors.shape[-1]}")
+        self.bivector_contract.validate(bivectors, name="bivectors")
         return self.execute(bivectors)
 
     def execute(self, bivectors: torch.Tensor) -> torch.Tensor:
@@ -175,6 +184,8 @@ class VersorVectorMatrixExecutor(nn.Module):
         super().__init__()
         self.grade = int(grade)
         self.parameter_layout = parameter_layout
+        self.parameter_contract = TensorContract.compact(parameter_layout.spec, parameter_layout)
+        self.parameter_layout = self.parameter_contract.layout
         self.n = parameter_layout.spec.n
         self.eps = float(eps)
         if self.grade == 2:
@@ -207,8 +218,7 @@ class VersorVectorMatrixExecutor(nn.Module):
 
     def forward(self, weights: torch.Tensor) -> torch.Tensor:
         """Return one vector-space action matrix per input weight row."""
-        if weights.shape[-1] != self.parameter_layout.dim:
-            raise ValueError(f"weights last dimension must be {self.parameter_layout.dim}, got {weights.shape[-1]}")
+        self.parameter_contract.validate(weights, name="weights")
         return self.execute(weights)
 
     def execute(self, weights: torch.Tensor) -> torch.Tensor:
@@ -236,6 +246,8 @@ class FullSandwichActionExecutor(nn.Module):
         self, *, layout: GradeLayout, cayley_indices: torch.Tensor, left_sign_t: torch.Tensor, gp_sign_t: torch.Tensor
     ):
         super().__init__()
+        self.contract = TensorContract.compact(layout.spec, layout)
+        layout = self.contract.layout
         if layout.grades != tuple(range(layout.spec.n + 1)):
             raise ValueError(f"full sandwich action requires full layout, got {layout.grades}")
         self.layout = layout
@@ -271,10 +283,7 @@ class FullSandwichActionExecutor(nn.Module):
 
     def action_matrices(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         """Return matrices ``M[..., k, j]`` such that ``output[..., k] = M @ x``."""
-        if left.ndim != 2 or right.ndim != 2:
-            raise ValueError(f"left and right factors must have shape [items, {self.dim}]")
-        if left.shape != right.shape or left.shape[-1] != self.dim:
-            raise ValueError(f"left and right factors must have matching shape [items, {self.dim}]")
+        self._check_factors(left, right)
         return self.action_matrices_unchecked(left, right)
 
     def action_matrices_unchecked(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
@@ -288,7 +297,8 @@ class FullSandwichActionExecutor(nn.Module):
 
     def per_channel(self, left: torch.Tensor, values: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         """Apply one sandwich action per channel in ``values``."""
-        validate_channel_values(values, self.layout, left.shape[0], "full sandwich values")
+        self._check_factors(left, right)
+        self.contract.validate_input(values, channels=left.shape[0], name="full sandwich values")
         return self.per_channel_unchecked(left, values, right)
 
     def per_channel_unchecked(self, left: torch.Tensor, values: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
@@ -298,12 +308,12 @@ class FullSandwichActionExecutor(nn.Module):
 
     def batched(self, left: torch.Tensor, values: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         """Apply one full-layout sandwich action per leading batch item."""
+        self._check_factors(left, right)
         if values.ndim != 3:
             raise ValueError(f"batched sandwich values must have shape [items, channels, {self.dim}]")
         if values.shape[0] != left.shape[0]:
             raise ValueError(f"values first dimension must be {left.shape[0]}, got {values.shape[0]}")
-        if values.shape[-1] != self.dim:
-            raise ValueError(f"values last dimension must be {self.dim}, got {values.shape[-1]}")
+        self.contract.validate(values, name="batched sandwich values")
         return self.batched_unchecked(left, values, right)
 
     def batched_unchecked(self, left: torch.Tensor, values: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
@@ -313,8 +323,8 @@ class FullSandwichActionExecutor(nn.Module):
 
     def multi(self, left: torch.Tensor, values: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         """Apply every full-layout action to every input channel."""
-        if values.shape[-1] != self.dim:
-            raise ValueError(f"values last dimension must be {self.dim}, got {values.shape[-1]}")
+        self._check_factors(left, right)
+        self.contract.validate(values, name="multi sandwich values")
         return self.multi_unchecked(left, values, right)
 
     def multi_unchecked(self, left: torch.Tensor, values: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
@@ -326,6 +336,8 @@ class FullSandwichActionExecutor(nn.Module):
         self, left: torch.Tensor, values: torch.Tensor, right: torch.Tensor, channel_to_pair: torch.Tensor
     ) -> torch.Tensor:
         """Apply pair actions selected by channel index."""
+        self._check_factors(left, right)
+        self.contract.validate_input(values, channels=channel_to_pair.numel(), name="routed sandwich values")
         return self.routed_unchecked(left, values, right, channel_to_pair)
 
     def routed_unchecked(
@@ -342,6 +354,14 @@ class FullSandwichActionExecutor(nn.Module):
 
     def _indices_for(self, values: torch.Tensor) -> torch.Tensor:
         return self.cayley_indices
+
+    def _check_factors(self, left: torch.Tensor, right: torch.Tensor) -> None:
+        if left.ndim != 2 or right.ndim != 2:
+            raise ValueError(f"left and right factors must have shape [items, {self.dim}]")
+        if left.shape != right.shape:
+            raise ValueError(f"left and right factors must have matching shape [items, {self.dim}]")
+        self.contract.validate(left, name="left")
+        self.contract.validate(right, name="right")
 
     def _left_signs_for(self, values: torch.Tensor) -> torch.Tensor:
         return self.left_sign_t
@@ -453,6 +473,12 @@ class VersorActionExecutor(_VersorFactorPlanMixin, nn.Module):
     ):
         super().__init__()
         object.__setattr__(self, "algebra", algebra)
+        self.input_contract = resolve_contract(algebra, layout=input_layout, name="input_layout")
+        self.output_contract = resolve_contract(algebra, layout=output_layout, name="output_layout")
+        self.parameter_contract = resolve_contract(algebra, layout=parameter_layout, name="parameter_layout")
+        input_layout = self.input_contract.layout
+        output_layout = self.output_contract.layout
+        parameter_layout = self.parameter_contract.layout
         self.grade = int(grade)
         self.input_layout = input_layout
         self.output_layout = output_layout
@@ -517,7 +543,8 @@ class VersorActionExecutor(_VersorFactorPlanMixin, nn.Module):
 
     def forward(self, values: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
         """Return transformed values in ``output_layout`` lanes."""
-        validate_channel_values(values, self.input_layout, weights.shape[0], "versor values")
+        self.input_contract.validate_input(values, channels=weights.shape[0], name="versor values")
+        self.parameter_contract.validate(weights, name="versor weights")
         return self.execute(values, weights)
 
     def execute(self, values: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
@@ -550,6 +577,12 @@ class MultiVersorActionExecutor(_VersorFactorPlanMixin, nn.Module):
     ):
         super().__init__()
         object.__setattr__(self, "algebra", algebra)
+        self.input_contract = resolve_contract(algebra, layout=input_layout, name="input_layout")
+        self.output_contract = resolve_contract(algebra, layout=output_layout, name="output_layout")
+        self.parameter_contract = resolve_contract(algebra, layout=parameter_layout, name="parameter_layout")
+        input_layout = self.input_contract.layout
+        output_layout = self.output_contract.layout
+        parameter_layout = self.parameter_contract.layout
         self.grade = int(grade)
         self.input_layout = input_layout
         self.output_layout = output_layout
@@ -614,7 +647,8 @@ class MultiVersorActionExecutor(_VersorFactorPlanMixin, nn.Module):
 
     def forward(self, values: torch.Tensor, weights: torch.Tensor, mix: torch.Tensor) -> torch.Tensor:
         """Return transformed values in ``output_layout`` lanes."""
-        validate_channel_values(values, self.input_layout, mix.shape[0], "multi-versor values")
+        self.input_contract.validate_input(values, channels=mix.shape[0], name="multi-versor values")
+        self.parameter_contract.validate(weights, name="multi-versor weights")
         if not self.use_full_action and mix.shape != (values.shape[-2], weights.shape[0]):
             raise ValueError(f"mix shape must be {(values.shape[-2], weights.shape[0])}, got {tuple(mix.shape)}")
         return self.execute(values, weights, mix)
@@ -653,13 +687,16 @@ class PairedBivectorActionExecutor(nn.Module):
         middle_layout: GradeLayout,
     ):
         super().__init__()
-        if (
-            input_layout.spec != output_layout.spec
-            or input_layout.spec != parameter_layout.spec
-            or input_layout.spec != rotor_layout.spec
-            or input_layout.spec != middle_layout.spec
-        ):
-            raise ValueError("paired bivector action layouts must share one algebra spec")
+        self.input_contract = resolve_contract(algebra, layout=input_layout, name="input_layout")
+        self.output_contract = resolve_contract(algebra, layout=output_layout, name="output_layout")
+        self.parameter_contract = resolve_contract(algebra, layout=parameter_layout, name="parameter_layout")
+        self.rotor_contract = resolve_contract(algebra, layout=rotor_layout, name="rotor_layout")
+        self.middle_contract = resolve_contract(algebra, layout=middle_layout, name="middle_layout")
+        input_layout = self.input_contract.layout
+        output_layout = self.output_contract.layout
+        parameter_layout = self.parameter_contract.layout
+        rotor_layout = self.rotor_contract.layout
+        middle_layout = self.middle_contract.layout
         if parameter_layout.grades != (2,):
             raise ValueError(f"parameter_layout must contain grade 2, got {parameter_layout.grades}")
         object.__setattr__(self, "algebra", algebra)
@@ -723,17 +760,23 @@ class PairedBivectorActionExecutor(nn.Module):
         channel_to_pair: torch.Tensor,
     ) -> torch.Tensor:
         """Return ``R_left x R_right_reverse`` for each routed input channel."""
-        validate_channel_values(values, self.input_layout, channel_to_pair.shape[0], "paired bivector values")
+        self.input_contract.validate_input(
+            values,
+            channels=channel_to_pair.shape[0],
+            name="paired bivector values",
+        )
         if left_weights.shape != right_weights.shape:
             raise ValueError(
                 f"left and right weights must have matching shapes, got {tuple(left_weights.shape)} "
                 f"and {tuple(right_weights.shape)}"
             )
-        if left_weights.ndim != 2 or left_weights.shape[-1] != self.parameter_layout.dim:
+        if left_weights.ndim != 2:
             raise ValueError(
                 f"bivector weights must have shape [pairs, {self.parameter_layout.dim}], "
                 f"got {tuple(left_weights.shape)}"
             )
+        self.parameter_contract.validate(left_weights, name="left bivector weights")
+        self.parameter_contract.validate(right_weights, name="right bivector weights")
 
         return self.execute(values, left_weights, right_weights, channel_to_pair)
 
@@ -792,6 +835,7 @@ def apply_multi_graded_linear_action(
 
 def versor_vector_matrix(algebra, weights: torch.Tensor, *, grade: int, parameter_layout: GradeLayout) -> torch.Tensor:
     """Return the vector-space matrix represented by grade-1 or grade-2 weights."""
+    parameter_layout = resolve_contract(algebra, layout=parameter_layout, name="parameter_layout").layout
     return VersorVectorMatrixExecutor(
         grade=grade,
         parameter_layout=parameter_layout,
@@ -812,10 +856,10 @@ def bivector_vector_generator(bivectors: torch.Tensor, *, bivector_layout: Grade
 
 def reflection_vector_matrix(normals: torch.Tensor, *, vector_layout: GradeLayout, eps: float) -> torch.Tensor:
     """Return the vector-space reflection matrix for normal vectors."""
+    contract = TensorContract.compact(vector_layout.spec, vector_layout)
     if vector_layout.grades != (1,):
         raise ValueError(f"vector_layout must contain grade 1 only, got {vector_layout.grades}")
-    if normals.shape[-1] != vector_layout.dim:
-        raise ValueError(f"normal dimension must be {vector_layout.dim}, got {normals.shape[-1]}")
+    contract.validate(normals, name="normals")
 
     signs = metric_self_signs(vector_layout, device=normals.device, dtype=normals.dtype)
     denominator = (normals * normals * signs).sum(dim=-1, keepdim=True)

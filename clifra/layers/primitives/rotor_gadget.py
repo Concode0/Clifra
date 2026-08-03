@@ -16,8 +16,7 @@ import torch.nn as nn
 from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.manifold import MANIFOLD_SPIN, tag_manifold
 from clifra.core.foundation.module import AlgebraLike, CliffordModule
-from clifra.core.foundation.validation import check_channels, check_multivector
-from clifra.core.runtime.tensors import TensorContract, resolve_contract
+from clifra.core.runtime.tensors import resolve_contract
 
 from ._utils import (
     channel_mix,
@@ -106,7 +105,10 @@ class RotorGadget(CliffordModule):
             output_layout=resolved_output_layout,
             parameter_layout=self.parameter_layout,
         )
-        self.output_contract = TensorContract.compact(self.input_contract.spec, self.action_plan.output_layout)
+        self.output_contract = self.action_plan.output_contract
+        self.parameter_contract = self.action_plan.parameter_contract
+        self.rotor_contract = self.action_plan.rotor_contract
+        self.middle_contract = self.action_plan.middle_contract
         self.input_layout = self.input_contract.layout
         self.output_layout = self.output_contract.layout
         self.rotor_layout = self.action_plan.rotor_layout
@@ -215,15 +217,11 @@ class RotorGadget(CliffordModule):
         Returns:
             Output tensor of shape [Batch, Out_Channels, Dim]
         """
-        if self.input_layout.dim == self.algebra.dim:
-            check_multivector(x, self.algebra, "RotorGadget input")
-            check_channels(x, self.in_channels, "RotorGadget input")
-        else:
-            self.input_contract.validate_input(
-                x,
-                channels=self.in_channels,
-                name="RotorGadget input",
-            )
+        self.input_contract.validate_input(
+            x,
+            channels=self.in_channels,
+            name="RotorGadget input",
+        )
 
         # Apply input channel shuffle if enabled
         if self.shuffle == "fixed":

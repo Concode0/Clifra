@@ -34,7 +34,7 @@ def test_bivector_exp_plan_partitions_bivector_lanes_by_metric_signature(signatu
     algebra = AlgebraContext(*signature, device=DEVICE, dtype=torch.float64)
     bivector_layout = algebra.layout((2,))
     even_layout = algebra.layout(range(0, algebra.n + 1, 2))
-    executor = algebra.planner.bivector_exp_executor_for_layouts(
+    executor = algebra.planner.bivector_exp_executor(
         input_layout=bivector_layout,
         output_layout=even_layout,
         dtype=torch.float64,
@@ -65,7 +65,7 @@ def test_bivector_exp_plan_generator_maps_match_vector_generator_blocks():
     algebra = AlgebraContext(3, 1, 2, device=DEVICE, dtype=torch.float64)
     bivector_layout = algebra.layout((2,))
     even_layout = algebra.layout(range(0, algebra.n + 1, 2))
-    executor = algebra.planner.bivector_exp_executor_for_layouts(
+    executor = algebra.planner.bivector_exp_executor(
         input_layout=bivector_layout,
         output_layout=even_layout,
         dtype=torch.float64,
@@ -106,13 +106,13 @@ def test_planner_bivector_exp_executor_outputs_match_cpu_oracle_for_layouts():
     generator = torch.Generator(device=DEVICE).manual_seed(281)
     compact = torch.randn(3, bivector_layout.dim, dtype=torch.float64, generator=generator) * 0.1
 
-    compact_executor = algebra.planner.bivector_exp_executor_for_layouts(
+    compact_executor = algebra.planner.bivector_exp_executor(
         input_layout=bivector_layout,
         output_layout=even_layout,
         dtype=torch.float64,
         device=DEVICE,
     )
-    full_executor = algebra.planner.bivector_exp_executor_for_layouts(
+    full_executor = algebra.planner.bivector_exp_executor(
         input_layout=bivector_layout,
         output_layout=full_layout,
         dtype=torch.float64,
@@ -379,7 +379,7 @@ def test_bivector_exp_executor_compiles_fullgraph_with_aot_eager():
     algebra = AlgebraContext(4, 0, device=DEVICE, dtype=torch.float32)
     input_layout = algebra.layout((2,))
     output_layout = algebra.layout((0, 2, 4))
-    executor = algebra.planner.bivector_exp_executor_for_layouts(
+    executor = algebra.planner.bivector_exp_executor(
         input_layout=input_layout,
         output_layout=output_layout,
         dtype=torch.float32,

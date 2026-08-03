@@ -50,6 +50,62 @@ from tests.planning._grade_plan_helpers import (
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize("route", ["plan_versor_action", "plan_multi_versor_action", "plan_paired_bivector_action"])
+@pytest.mark.parametrize("foreign_side", ["input", "output", "parameter"])
+def test_action_plans_reject_foreign_contracts_before_executor_construction(route, foreign_side):
+    algebra = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float32)
+    foreign = AlgebraContext(0, 3, 0, device=DEVICE, dtype=torch.float32)
+    layouts = {
+        "input_layout": algebra.layout((1,)),
+        "output_layout": algebra.layout((1,)),
+        "parameter_layout": algebra.layout((2,)),
+    }
+    layouts[f"{foreign_side}_layout"] = foreign.layout((2,) if foreign_side == "parameter" else (1,))
+    cache_sizes = (
+        len(algebra.planner._product_executors),
+        len(algebra.planner._unary_executors),
+        len(algebra.planner._bivector_exp_executors),
+    )
+
+    with pytest.raises(ValueError, match=rf"{foreign_side}_layout signature .* does not match algebra signature"):
+        if route == "plan_paired_bivector_action":
+            algebra.plan_paired_bivector_action(**layouts)
+        else:
+            getattr(algebra, route)(grade=2, **layouts)
+
+    assert (
+        len(algebra.planner._product_executors),
+        len(algebra.planner._unary_executors),
+        len(algebra.planner._bivector_exp_executors),
+    ) == cache_sizes
+
+
+def test_action_plan_accepts_contracts_from_equal_signature_algebra():
+    algebra = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float32)
+    peer = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float32)
+
+    handle = algebra.plan_versor_action(
+        grade=2,
+        input_layout=peer.layout((1,)),
+        output_layout=peer.layout((1,)),
+        parameter_layout=peer.layout((2,)),
+    )
+
+    assert handle.input_layout.spec == algebra.planner.spec
+    assert handle.output_layout.spec == algebra.planner.spec
+    assert handle.parameter_layout.spec == algebra.planner.spec
+
+    plan = algebra.planner.versor_action_plan(
+        grade=2,
+        input_layout=peer.layout((1,)),
+        output_layout=peer.layout((1,)),
+        parameter_layout=peer.layout((2,)),
+    )
+    assert plan.input_contract.spec == algebra.planner.spec
+    assert plan.output_contract.spec == algebra.planner.spec
+    assert plan.parameter_contract.spec == algebra.planner.spec
+
+
 def test_multi_graded_linear_action_matches_stacked_single_actions():
     algebra = AlgebraContext(4, 0, 0, device=DEVICE, dtype=torch.float64)
     layout = algebra.layout((0, 1, 2))
@@ -193,7 +249,7 @@ def test_plan_sandwich_action_handle_covers_public_full_action_helpers():
     handle = algebra.plan_sandwich_action(layout=full_layout, dtype=torch.float64, device=DEVICE)
 
     assert isinstance(handle, FullSandwichActionHandle)
-    assert handle.executor is algebra.planner.full_sandwich_action_executor_for_layout(
+    assert handle.executor is algebra.planner.full_sandwich_action_executor(
         layout=full_layout,
         dtype=torch.float64,
         device=DEVICE,
@@ -469,7 +525,7 @@ def test_compact_vector_bivector_action_uses_vector_matrix_fullgraph():
     assert torch.allclose(actual, expected, atol=1e-5, rtol=1e-5)
 
 
-def test_action_plan_handles_split_checked_validation_from_fast_forward():
+def test_action_plan_handle_validates_inputs_through_executor_forward():
     context = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float64)
     vector_layout = context.layout((1,))
     bivector_layout = context.layout((2,))
@@ -483,6 +539,6 @@ def test_action_plan_handles_split_checked_validation_from_fast_forward():
     values = torch.randn(2, 4, vector_layout.dim, dtype=torch.float64, generator=generator)
     weights = torch.randn(4, bivector_layout.dim, dtype=torch.float64, generator=generator) * 0.1
 
-    assert torch.allclose(handle(values, weights), handle.executor.execute(values, weights), atol=1e-12, rtol=1e-12)
+    assert torch.allclose(handle(values, weights), handle.executor(values, weights), atol=1e-12, rtol=1e-12)
     with pytest.raises(ValueError, match="expected 3 channels"):
-        handle.checked(values, weights[:3])
+        handle(values, weights[:3])

@@ -75,38 +75,22 @@ class FullSandwichActionHandle(nn.Module):
 
     def forward(self, left: torch.Tensor, values: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         """Apply one sandwich action per channel in ``values``."""
-        return self.executor.per_channel_unchecked(left, values, right)
+        return self.executor.per_channel(left, values, right)
 
     def action_matrices(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         """Return full-layout action matrices for the supplied left/right factors."""
-        return self.executor.action_matrices_unchecked(left, right)
-
-    def checked_action_matrices(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
-        """Return action matrices with eager validation."""
         return self.executor.action_matrices(left, right)
 
     def per_channel(self, left: torch.Tensor, values: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         """Apply one sandwich action per channel in ``values``."""
-        return self.executor.per_channel_unchecked(left, values, right)
-
-    def checked_per_channel(self, left: torch.Tensor, values: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
-        """Apply one sandwich action per channel with eager validation."""
         return self.executor.per_channel(left, values, right)
 
     def batched(self, left: torch.Tensor, values: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         """Apply one sandwich action per leading batch item."""
-        return self.executor.batched_unchecked(left, values, right)
-
-    def checked_batched(self, left: torch.Tensor, values: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
-        """Apply one sandwich action per leading batch item with eager validation."""
         return self.executor.batched(left, values, right)
 
     def multi(self, left: torch.Tensor, values: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         """Apply every sandwich action to every channel."""
-        return self.executor.multi_unchecked(left, values, right)
-
-    def checked_multi(self, left: torch.Tensor, values: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
-        """Apply every sandwich action to every channel with eager validation."""
         return self.executor.multi(left, values, right)
 
     def routed(
@@ -117,16 +101,6 @@ class FullSandwichActionHandle(nn.Module):
         channel_to_pair: torch.Tensor,
     ) -> torch.Tensor:
         """Apply actions selected by channel index."""
-        return self.executor.routed_unchecked(left, values, right, channel_to_pair)
-
-    def checked_routed(
-        self,
-        left: torch.Tensor,
-        values: torch.Tensor,
-        right: torch.Tensor,
-        channel_to_pair: torch.Tensor,
-    ) -> torch.Tensor:
-        """Apply actions selected by channel index with eager validation."""
         return self.executor.routed(left, values, right, channel_to_pair)
 
 
@@ -146,10 +120,6 @@ class VersorActionHandle(nn.Module):
 
     def forward(self, values: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
         """Apply one grade-1 or grade-2 versor per channel."""
-        return self.executor.execute(values, weights)
-
-    def checked(self, values: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
-        """Apply one grade-1 or grade-2 versor per channel with eager validation."""
         return self.executor(values, weights)
 
 
@@ -169,10 +139,6 @@ class MultiVersorActionHandle(nn.Module):
 
     def forward(self, values: torch.Tensor, weights: torch.Tensor, mix: torch.Tensor) -> torch.Tensor:
         """Apply a weighted superposition of grade-1 or grade-2 versor actions."""
-        return self.executor.execute(values, weights, mix)
-
-    def checked(self, values: torch.Tensor, weights: torch.Tensor, mix: torch.Tensor) -> torch.Tensor:
-        """Apply a weighted superposition with eager validation."""
         return self.executor(values, weights, mix)
 
 
@@ -199,14 +165,4 @@ class PairedBivectorActionHandle(nn.Module):
         channel_to_pair: torch.Tensor,
     ) -> torch.Tensor:
         """Apply independent left/right bivector rotor pairs routed by channel."""
-        return self.executor.execute(values, left_weights, right_weights, channel_to_pair)
-
-    def checked(
-        self,
-        values: torch.Tensor,
-        left_weights: torch.Tensor,
-        right_weights: torch.Tensor,
-        channel_to_pair: torch.Tensor,
-    ) -> torch.Tensor:
-        """Apply routed paired-bivector actions with eager validation."""
         return self.executor(values, left_weights, right_weights, channel_to_pair)

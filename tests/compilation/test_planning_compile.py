@@ -180,14 +180,14 @@ def test_context_projected_product_compiles_fullgraph_from_cold_planner_cache():
 def test_full_table_product_executor_compiles_fullgraph_with_aot_eager():
     algebra = AlgebraContext(4, 0, device=DEVICE, dtype=torch.float32)
     full_layout = algebra.layout()
-    executor = algebra.planner.product_executor_for_layouts(
+    executor = algebra.plan_product(
         op="gp",
         left_layout=full_layout,
         right_layout=full_layout,
         output_layout=full_layout,
         dtype=torch.float32,
         device=DEVICE,
-    )
+    ).executor
     generator = torch.Generator(device=DEVICE).manual_seed(197)
     left = torch.randn(4, algebra.dim, dtype=torch.float32, generator=generator)
     right = torch.randn(4, algebra.dim, dtype=torch.float32, generator=generator)
@@ -479,7 +479,7 @@ def test_plan_paired_bivector_action_handle_compiles_fullgraph_without_cache_mut
 def test_signature_norm_squared_executor_compiles_fullgraph_with_aot_eager():
     algebra = AlgebraContext(5, 0, device=DEVICE, dtype=torch.float32)
     layout = algebra.layout((2,))
-    executor = algebra.planner.signature_norm_squared_executor_for_layout(
+    executor = algebra.planner.signature_norm_squared_executor(
         input_layout=layout,
         dtype=torch.float32,
         device=DEVICE,
@@ -536,7 +536,7 @@ def test_pseudoscalar_product_executor_compiles_fullgraph_with_aot_eager():
     algebra = AlgebraContext(5, 0, device=DEVICE, dtype=torch.float32)
     input_layout = algebra.layout((1,))
     output_layout = algebra.layout((4,))
-    executor = algebra.planner.pseudoscalar_product_executor_for_layout(
+    executor = algebra.planner.pseudoscalar_product_executor(
         input_layout=input_layout,
         output_layout=output_layout,
         dtype=torch.float32,
@@ -571,14 +571,14 @@ def test_contraction_executor_compiles_fullgraph_with_aot_eager(op, left_grades,
     left_layout = algebra.layout(left_grades)
     right_layout = algebra.layout(right_grades)
     output_layout = algebra.layout(output_grades)
-    executor = algebra.planner.product_executor_for_layouts(
+    executor = algebra.plan_product(
         op=op,
         left_layout=left_layout,
         right_layout=right_layout,
         output_layout=output_layout,
         dtype=torch.float32,
         device=DEVICE,
-    )
+    ).executor
     generator = torch.Generator(device=DEVICE).manual_seed(241)
     left = torch.randn(4, left_layout.dim, dtype=torch.float32, generator=generator)
     right = torch.randn(4, right_layout.dim, dtype=torch.float32, generator=generator)

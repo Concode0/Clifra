@@ -6,13 +6,14 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 
 import torch
 
 from clifra.core.foundation.basis import basis_index_tuple_for_grades
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
+from clifra.core.runtime.tensors import TensorContract, _check_contract_spec
 
 SPECTRAL_LOCAL_MAX_PLANES = 4
 SPECTRAL_LOCAL_MAX_IDEAL_DIM = 4
@@ -121,6 +122,25 @@ class BivectorExpPlan:
     spectral_local_axis_count: int
     eps: float
     eps_sq: float
+    input_contract: TensorContract = field(init=False, repr=False)
+    output_contract: TensorContract = field(init=False, repr=False)
+    operator_contract: TensorContract = field(init=False, repr=False)
+    grade4_contract: TensorContract | None = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        for role in ("input", "output", "operator"):
+            layout = getattr(self, f"{role}_layout")
+            contract = TensorContract.compact(layout.spec, layout)
+            object.__setattr__(
+                self,
+                f"{role}_contract",
+                _check_contract_spec(self.spec, contract, f"{role}_layout"),
+            )
+        grade4_contract = None
+        if self.grade4_layout is not None:
+            contract = TensorContract.compact(self.grade4_layout.spec, self.grade4_layout)
+            grade4_contract = _check_contract_spec(self.spec, contract, "grade4_layout")
+        object.__setattr__(self, "grade4_contract", grade4_contract)
 
 
 @dataclass(frozen=True)
@@ -188,10 +208,10 @@ def build_bivector_exp_plan(
     spectral_allow_truncated_degenerate: bool = True,
 ) -> BivectorExpPlan:
     """Build a static plan for the bivector exponential ``exp(B)`` where ``B`` is grade-2."""
-    if input_layout.spec != spec:
-        raise ValueError(f"input_layout signature {input_layout.spec} does not match algebra signature {spec}")
-    if output_layout.spec != spec:
-        raise ValueError(f"output_layout signature {output_layout.spec} does not match algebra signature {spec}")
+    input_contract = TensorContract.compact(input_layout.spec, input_layout)
+    output_contract = TensorContract.compact(output_layout.spec, output_layout)
+    input_layout = _check_contract_spec(spec, input_contract, "input_layout").layout
+    output_layout = _check_contract_spec(spec, output_contract, "output_layout").layout
     if input_layout.grades != (2,):
         raise ValueError(f"bivector exp requires grade-2 input layout, got {input_layout.grades}")
 

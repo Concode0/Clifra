@@ -21,14 +21,14 @@ class SignatureNormSquaredExecutor(nn.Module):
         super().__init__()
         self.spec = plan.spec
         self.input_layout = plan.input_layout
+        self.input_contract = plan.input_contract
         self.input_grades = plan.input_grades
         self.input_dim = plan.input_dim
         self.register_buffer("signs", plan.signs, persistent=False)
 
     def forward(self, values: torch.Tensor) -> torch.Tensor:
         """Return ``<values reverse(values)>_0`` as ``[..., 1]``."""
-        if values.shape[-1] != self.input_dim:
-            raise ValueError(f"values last dimension must be {self.input_dim}, got {values.shape[-1]}")
+        self.input_contract.validate(values, name="values")
         return (values * values * self.signs).sum(dim=-1, keepdim=True)
 
 __all__ = ["SignatureNormSquaredExecutor"]

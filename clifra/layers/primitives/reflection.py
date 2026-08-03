@@ -13,6 +13,7 @@ from clifra.core.foundation.numerics import eps_like
 from clifra.core.runtime.tensors import resolve_contract
 
 from ._utils import (
+    _compact_contract_values,
     grade_indices,
     require_positive_int,
 )
@@ -71,6 +72,7 @@ class ReflectionLayer(CliffordModule):
             output_layout=self.output_layout,
             parameter_layout=self.vector_layout,
         )
+        self.parameter_contract = self.action.executor.parameter_contract
 
         self.vector_weights = nn.Parameter(torch.Tensor(self.channels, self.num_vectors))
         tag_manifold(self.vector_weights, MANIFOLD_SPHERE)
@@ -94,7 +96,7 @@ class ReflectionLayer(CliffordModule):
         Returns:
             torch.Tensor: Reflected input [Batch, Channels, Dim].
         """
-        values = x if x.shape[-1] == self.input_layout.dim else self.input_layout.compact(x)
+        values = _compact_contract_values(x, self.input_contract, "ReflectionLayer input")
         return self.action(values, self.vector_weights)
 
     def sparsity_loss(self) -> torch.Tensor:

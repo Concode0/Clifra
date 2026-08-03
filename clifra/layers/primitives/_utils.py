@@ -9,6 +9,8 @@ from typing import Iterable
 
 import torch
 
+from clifra.core.runtime.tensors import TensorContract
+
 
 def require_positive_int(value: int, name: str) -> int:
     """Validate a positive integer layer dimension."""
@@ -25,6 +27,21 @@ def require_choice(value: str, name: str, choices: Iterable[str]) -> str:
         supported = ", ".join(repr(option) for option in options)
         raise ValueError(f"{name} must be one of {supported}, got {value!r}")
     return value
+
+
+def _compact_contract_values(values: torch.Tensor, contract: TensorContract, name: str) -> torch.Tensor:
+    """Adapt compact or canonical lanes through one pre-resolved contract."""
+    if values.ndim < 1:
+        raise ValueError(f"{name} must include a coefficient lane dimension, got shape {tuple(values.shape)}")
+    lane_dim = values.shape[-1]
+    if lane_dim == contract.layout.dim:
+        return values
+    if lane_dim == contract.spec.dim:
+        return contract.layout.compact(values)
+    raise ValueError(
+        f"{name} last dimension must be {contract.layout.dim} for compact grades {contract.grades} "
+        f"or {contract.spec.dim} canonical lanes, got {lane_dim}"
+    )
 
 
 def grade_indices(algebra, grade: int, *, name: str = "grade") -> torch.Tensor:

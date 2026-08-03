@@ -12,6 +12,7 @@ from clifra.core.foundation.module import AlgebraLike, CliffordModule
 from clifra.core.runtime.tensors import resolve_contract
 
 from ._utils import (
+    _compact_contract_values,
     grade_indices,
     require_positive_int,
 )
@@ -80,6 +81,7 @@ class VersorLayer(CliffordModule):
             output_layout=self.output_layout,
             parameter_layout=self.parameter_layout,
         )
+        self.parameter_contract = self.action.executor.parameter_contract
 
         self.grade_weights = nn.Parameter(torch.Tensor(self.channels, self.num_grade_elements))
         if self.grade == 2:
@@ -100,7 +102,7 @@ class VersorLayer(CliffordModule):
         Returns:
             torch.Tensor: Transformed input [Batch, Channels, Dim].
         """
-        values = x if x.shape[-1] == self.input_layout.dim else self.input_layout.compact(x)
+        values = _compact_contract_values(x, self.input_contract, "VersorLayer input")
         return self.action(values, self.grade_weights)
 
     def prune_weights(self, threshold: float = 1e-4) -> int:
