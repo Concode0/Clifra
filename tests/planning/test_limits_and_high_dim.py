@@ -85,14 +85,14 @@ def test_high_dimensional_vector_product_plan_avoids_full_basis_enumeration():
         planning_limits=PlanningLimits(max_lanes=4096, max_pairs=100_000),
     )
     vector_layout = algebra.layout((1,))
-    executor = algebra.planner.product_executor(
+    executor = algebra.plan_product(
         op="gp",
         left_grades=(1,),
         right_grades=(1,),
         output_grades=(0, 2),
         dtype=torch.float32,
         device=DEVICE,
-    )
+    ).executor
 
     assert vector_layout.dim == 32
     assert executor.output_dim == 1 + 32 * 31 // 2
@@ -108,14 +108,14 @@ def test_high_dimensional_vector_product_plan_avoids_dense_lookup_at_int64_limit
         dtype=torch.float32,
         planning_limits=PlanningLimits(max_lanes=4096, max_pairs=100_000),
     )
-    executor = algebra.planner.product_executor(
+    executor = algebra.plan_product(
         op="gp",
         left_grades=(1,),
         right_grades=(1,),
         output_grades=(0, 2),
         dtype=torch.float32,
         device=DEVICE,
-    )
+    ).executor
 
     assert executor.output_dim == 1 + 63 * 62 // 2
     assert executor.pair_count == 63 * 63
@@ -132,7 +132,7 @@ def test_high_dimensional_product_plan_reports_int64_bitmask_boundary():
     )
 
     with pytest.raises(ValueError, match="Current Torch-backed executors support bitmask tensorization up to n=63"):
-        algebra.planner.product_executor(
+        algebra.plan_product(
             op="gp",
             left_grades=(1,),
             right_grades=(1,),

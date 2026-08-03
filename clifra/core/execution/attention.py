@@ -13,6 +13,7 @@ import torch.nn as nn
 from clifra.core.foundation.basis import reverse_sign
 from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.numerics import eps_like
+from clifra.core.runtime.tensors import resolve_contract
 
 
 class GeometricAttentionScoreExecutor(nn.Module):
@@ -30,17 +31,18 @@ class GeometricAttentionScoreExecutor(nn.Module):
         self.algebra = algebra
         self.head_channels = int(head_channels)
         self.bivector_weight = float(bivector_weight)
-        self.layout = layout
+        self.layout_contract = resolve_contract(algebra, layout=layout, name="layout")
+        self.layout = self.layout_contract.layout
         self.score_output_layout = algebra.layout((0, 2))
-        self.score_product = algebra.product_executor(
-            left_grades=layout.grades,
-            right_grades=layout.grades,
+        self.score_product = algebra.plan_product(
+            left_layout=self.layout,
+            right_layout=self.layout,
             output_grades=self.score_output_layout.grades,
             op="gp",
             dtype=algebra.dtype,
             device=algebra.device,
             cache=True,
-        )
+        ).executor
         self.register_buffer(
             "_score_scalar_positions",
             self.score_output_layout.positions_for_grades((0,), device=algebra.device),
@@ -54,7 +56,7 @@ class GeometricAttentionScoreExecutor(nn.Module):
         self.register_buffer(
             "_right_reverse_signs",
             torch.tensor(
-                [reverse_sign(index) for index in layout.basis_indices],
+                [reverse_sign(index) for index in self.layout.basis_indices],
                 dtype=algebra.dtype,
                 device=algebra.device,
             ),
@@ -63,10 +65,8 @@ class GeometricAttentionScoreExecutor(nn.Module):
 
     def forward(self, q_head: torch.Tensor, k_head: torch.Tensor) -> torch.Tensor:
         """Return attention scores for heads shaped ``[B, H, L, Hc, D]``."""
-        if q_head.shape[-1] != self.layout.dim:
-            raise ValueError(f"q_head last dim must be {self.layout.dim}, got {q_head.shape[-1]}")
-        if k_head.shape[-1] != self.layout.dim:
-            raise ValueError(f"k_head last dim must be {self.layout.dim}, got {k_head.shape[-1]}")
+        self.layout_contract.validate(q_head, name="q_head")
+        self.layout_contract.validate(k_head, name="k_head")
 
         B, H, Lq, Hc, lane_dim = q_head.shape
         Lk = k_head.shape[2]

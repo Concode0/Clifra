@@ -26,6 +26,7 @@ from clifra.core.foundation.basis import (
 from clifra.core.foundation.layout import AlgebraSpec
 from clifra.core.planning.layouts import ProductRequest
 from clifra.core.planning.tree import GradePlanTree, build_grade_plan_tree
+from clifra.core.runtime.tensors import TensorContract
 
 
 class GradeProductPlan:
@@ -59,6 +60,9 @@ class GradeProductPlan:
         self.left_layout = self.spec.layout(left_grades)
         self.right_layout = self.spec.layout(right_grades)
         self.output_layout = self.spec.layout(output_grades)
+        self.left_contract = TensorContract.compact(self.spec, self.left_layout)
+        self.right_contract = TensorContract.compact(self.spec, self.right_layout)
+        self.output_contract = TensorContract.compact(self.spec, self.output_layout)
         self.left_indices = left_indices
         self.right_indices = right_indices
         self.output_indices = output_indices
@@ -156,6 +160,9 @@ class FullTableProductPlan:
         self.left_layout = spec.full_layout()
         self.right_layout = spec.full_layout()
         self.output_layout = spec.full_layout()
+        self.left_contract = TensorContract.compact(spec, self.left_layout)
+        self.right_contract = TensorContract.compact(spec, self.right_layout)
+        self.output_contract = TensorContract.compact(spec, self.output_layout)
         self.cayley_indices = cayley_indices
         self.signs = signs
         self.pair_count = int(pair_count)

@@ -12,7 +12,7 @@ import torch
 from clifra.core.foundation.basis import normalize_grades
 from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.module import CliffordModule
-from clifra.core.runtime.tensors import LaneStorage, check_layout_spec
+from clifra.core.runtime.tensors import LaneStorage, TensorContract, resolve_contract
 from clifra.functional.products import canonical_product_op, product
 
 
@@ -68,9 +68,12 @@ class ProductLayer(CliffordModule):
         self.left_grades = _normalize_optional_grades(left_grades, algebra.n, name="left_grades")
         self.right_grades = _normalize_optional_grades(right_grades, algebra.n, name="right_grades")
         self.output_grades = _normalize_optional_grades(output_grades, algebra.n, name="output_grades")
-        self.left_layout = _validate_optional_layout(algebra, left_layout, self.left_grades, "left")
-        self.right_layout = _validate_optional_layout(algebra, right_layout, self.right_grades, "right")
-        self.output_layout = _validate_optional_layout(algebra, output_layout, self.output_grades, "output")
+        self.left_contract = _resolve_optional_contract(algebra, left_layout, self.left_grades, "left")
+        self.right_contract = _resolve_optional_contract(algebra, right_layout, self.right_grades, "right")
+        self.output_contract = _resolve_optional_contract(algebra, output_layout, self.output_grades, "output")
+        self.left_layout = None if self.left_contract is None else self.left_contract.layout
+        self.right_layout = None if self.right_contract is None else self.right_contract.layout
+        self.output_layout = None if self.output_contract is None else self.output_contract.layout
         self.pairwise = bool(pairwise)
 
     def forward(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
@@ -166,10 +169,18 @@ class RightContractionLayer(ProductLayer):
     def __init__(self, algebra, **kwargs):
         super().__init__(algebra, op="right_contraction", **kwargs)
 
-def _validate_optional_layout(algebra, layout: GradeLayout | None, grades, side: str) -> GradeLayout | None:
-    if layout is None:
+def _resolve_optional_contract(
+    algebra,
+    layout: GradeLayout | None,
+    grades,
+    side: str,
+) -> TensorContract | None:
+    if layout is None and grades is None:
         return None
-    check_layout_spec(algebra.planner.spec, layout, f"{side}_layout")
-    if grades is not None and layout.grades != grades:
-        raise ValueError(f"{side}_layout and {side}_grades disagree")
-    return layout
+    return resolve_contract(
+        algebra,
+        layout=layout,
+        grades=grades,
+        storage=LaneStorage.COMPACT,
+        name=f"{side}_layout",
+    )

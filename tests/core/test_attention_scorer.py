@@ -63,3 +63,16 @@ def test_compact_attention_scorer_matches_full_lane_reference():
     )
 
     assert torch.allclose(actual, expected, atol=1e-12, rtol=1e-12)
+
+
+def test_attention_scorer_rejects_foreign_layout_contract():
+    algebra = AlgebraContext(3, 0, 0, device="cpu", dtype=torch.float32)
+    foreign = AlgebraContext(0, 3, 0, device="cpu", dtype=torch.float32)
+
+    with pytest.raises(ValueError, match="layout signature .* does not match algebra signature"):
+        GeometricAttentionScoreExecutor(
+            algebra,
+            head_channels=2,
+            bivector_weight=0.25,
+            layout=foreign.layout((1,)),
+        )

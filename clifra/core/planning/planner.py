@@ -46,7 +46,7 @@ from clifra.core.planning.unary import (
     build_unary_request,
     normalize_unary_op,
 )
-from clifra.core.runtime.tensors import LaneStorage, TensorContract
+from clifra.core.runtime.tensors import LaneStorage, TensorContract, _check_contract_spec
 
 
 class GradePlanner:
@@ -155,34 +155,26 @@ class GradePlanner:
 
     def product_executor(
         self,
+        request: ProductRequest,
         *,
-        op: str,
-        left_grades,
-        right_grades,
-        output_grades,
-        dtype,
-        device,
         cache: bool = True,
-    ):
-        """Return a cached static executor for a projected bilinear product."""
-        left_grades, right_grades, output_grades = validate_product_grades_cost(
-            self.algebra,
-            self.spec,
-            op=op,
-            left_grades=left_grades,
-            right_grades=right_grades,
-            output_grades=output_grades,
-        )
-        request = ProductRequest(
-            spec=self.spec,
-            op=normalize_product_op(op),
-            left=TensorContract.compact(self.spec, self.layout(left_grades)),
-            right=TensorContract.compact(self.spec, self.layout(right_grades)),
-            output=TensorContract.compact(self.spec, self.layout(output_grades)),
-            dtype=dtype,
-            device=torch.device(device),
-        )
-        return self.product_executor_for_request(request, cache=cache)
+    ) -> FullTableProductExecutor | GradeProductExecutor:
+        """Return the cached executor for one normalized product request."""
+        request.validate(self.spec)
+        validate_product_request(self.algebra, request)
+        family = self._product_executor_family(request)
+        key = self._product_request_cache_key(request, family)
+        executor = self._product_executors.get(key) if cache else None
+        if executor is None:
+            if family == "full_table":
+                plan = build_full_table_product_plan_from_request(request)
+                executor = FullTableProductExecutor(plan)
+            else:
+                plan = build_grade_product_plan_from_request(request)
+                executor = GradeProductExecutor(plan)
+            if cache:
+                self._product_executors[key] = executor
+        return executor
 
     def product_request(
         self,
@@ -201,6 +193,12 @@ class GradePlanner:
         output_storage: LaneStorage | str = LaneStorage.COMPACT,
     ) -> ProductRequest:
         """Normalize product intent into a static request without executing tensors."""
+        if left_layout is not None:
+            left_layout = self._compact_contract(left_layout, "left_layout").layout
+        if right_layout is not None:
+            right_layout = self._compact_contract(right_layout, "right_layout").layout
+        if output_layout is not None:
+            output_layout = self._compact_contract(output_layout, "output_layout").layout
         left_grades = self._default_operand_grades(left_grades, left_layout)
         right_grades = self._default_operand_grades(right_grades, right_layout)
         self._validate_product_grade_cost_before_layouts(
@@ -229,71 +227,6 @@ class GradePlanner:
         )
         validate_product_request(self.algebra, request)
         return request
-
-    def product_executor_for_request(
-        self, request: ProductRequest, *, cache: bool = True
-    ) -> FullTableProductExecutor | GradeProductExecutor:
-        """Return an executor for an already normalized product request."""
-        validate_product_request(self.algebra, request)
-        family = self._product_executor_family(request)
-        key = self._product_request_cache_key(request, family)
-        executor = self._product_executors.get(key) if cache else None
-        if executor is None:
-            if family == "full_table":
-                plan = build_full_table_product_plan_from_request(request)
-                executor = FullTableProductExecutor(plan)
-            else:
-                plan = build_grade_product_plan_from_request(request)
-                executor = GradeProductExecutor(plan)
-            if cache:
-                self._product_executors[key] = executor
-        return executor
-
-    def product_executor_for_layouts(
-        self,
-        *,
-        op: str,
-        left_layout: GradeLayout,
-        right_layout: GradeLayout,
-        output_layout: GradeLayout,
-        dtype: torch.dtype,
-        device,
-        cache: bool = True,
-    ) -> FullTableProductExecutor | GradeProductExecutor:
-        """Return a cached executor when layout resolution is already complete."""
-        normalized_op = normalize_product_op(op)
-        resolved_device = torch.device(device)
-        family = self._product_executor_family_for_layouts(
-            op=normalized_op,
-            left_layout=left_layout,
-            right_layout=right_layout,
-            output_layout=output_layout,
-            dtype=dtype,
-            device=resolved_device,
-        )
-        key = (
-            self.spec,
-            str(resolved_device),
-            str(dtype),
-            family,
-            normalized_op,
-            left_layout.grades,
-            right_layout.grades,
-            output_layout.grades,
-        )
-        executor = self._product_executors.get(key) if cache else None
-        if executor is None:
-            request = ProductRequest(
-                spec=self.spec,
-                op=normalized_op,
-                left=TensorContract.compact(self.spec, left_layout),
-                right=TensorContract.compact(self.spec, right_layout),
-                output=TensorContract.compact(self.spec, output_layout),
-                dtype=dtype,
-                device=resolved_device,
-            )
-            executor = self.product_executor_for_request(request, cache=cache)
-        return executor
 
     def product_tree(self, *, op: str, left_grades, right_grades, output_grades=None):
         """Return planner-only grade tree metadata for a product route."""
@@ -660,6 +593,9 @@ class GradePlanner:
         return executor
 
     def _product_cache_key(self, executor: FullTableProductExecutor | GradeProductExecutor) -> tuple[object, ...]:
+        self._compact_contract(executor.left_layout, "left_layout")
+        self._compact_contract(executor.right_layout, "right_layout")
+        self._compact_contract(executor.output_layout, "output_layout")
         buffer = getattr(executor, "coefficients", None)
         if buffer is None:
             buffer = executor.signs
@@ -695,27 +631,6 @@ class GradePlanner:
             output_layout=request.output_layout,
             dtype=request.dtype,
             device=request.device,
-        )
-        return cost.executor_family
-
-    def _product_executor_family_for_layouts(
-        self,
-        *,
-        op: str,
-        left_layout: GradeLayout,
-        right_layout: GradeLayout,
-        output_layout: GradeLayout,
-        dtype: torch.dtype,
-        device,
-    ) -> str:
-        cost = estimate_product_executor_cost(
-            self.algebra,
-            op=op,
-            left_layout=left_layout,
-            right_layout=right_layout,
-            output_layout=output_layout,
-            dtype=dtype,
-            device=device,
         )
         return cost.executor_family
 
@@ -780,6 +695,10 @@ class GradePlanner:
         if grades is not None or layout is not None:
             return grades
         return getattr(self.algebra, "_default_grades", None)
+
+    def _compact_contract(self, layout: GradeLayout, name: str) -> TensorContract:
+        contract = TensorContract.compact(layout.spec, layout)
+        return _check_contract_spec(self.spec, contract, name)
 
     def _validate_product_grade_cost_before_layouts(
         self,

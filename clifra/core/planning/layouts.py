@@ -21,6 +21,7 @@ from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
 from clifra.core.runtime.tensors import (
     LaneStorage,
     TensorContract,
+    _check_contract_spec,
     check_layout_spec,
     infer_contract,
     normalize_lane_storage,
@@ -52,6 +53,40 @@ class ProductRequest:
     output: TensorContract
     dtype: torch.dtype
     device: torch.device
+
+    @classmethod
+    def compact(
+        cls,
+        spec: AlgebraSpec,
+        *,
+        op: str,
+        left_layout: GradeLayout,
+        right_layout: GradeLayout,
+        output_layout: GradeLayout,
+        dtype: torch.dtype,
+        device,
+    ) -> "ProductRequest":
+        """Build a normalized request for compact planned execution."""
+        return cls(
+            spec=spec,
+            op=normalize_product_op(op),
+            left=TensorContract.compact(left_layout.spec, left_layout),
+            right=TensorContract.compact(right_layout.spec, right_layout),
+            output=TensorContract.compact(output_layout.spec, output_layout),
+            dtype=dtype,
+            device=torch.device(device),
+        )
+
+    def __post_init__(self) -> None:
+        self.validate(self.spec)
+
+    def validate(self, spec: AlgebraSpec) -> None:
+        """Validate all contracts against a receiving algebra specification."""
+        if self.spec != spec:
+            raise ValueError(f"request signature {self.spec} does not match algebra signature {spec}")
+        _check_contract_spec(spec, self.left, "left_layout")
+        _check_contract_spec(spec, self.right, "right_layout")
+        _check_contract_spec(spec, self.output, "output_layout")
 
     @property
     def left_layout(self) -> GradeLayout:
@@ -178,7 +213,8 @@ def resolve_output_layout(
 ) -> GradeLayout:
     """Resolve the output layout for a product request."""
     if output_layout is not None:
-        check_layout_spec(spec, output_layout, "output_layout")
+        output_contract = TensorContract.compact(output_layout.spec, output_layout)
+        output_layout = _check_contract_spec(spec, output_contract, "output_layout").layout
         if output_grades is not None and output_layout.grades != normalize_grades(
             output_grades, spec.n, name="output_grades"
         ):
