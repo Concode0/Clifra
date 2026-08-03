@@ -16,7 +16,7 @@ from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
 from clifra.core.runtime.tensors import (
     LaneStorage,
     TensorContract,
-    check_layout_spec,
+    _check_contract_spec,
     infer_contract,
 )
 
@@ -34,6 +34,37 @@ class UnaryRequest:
     output: TensorContract
     dtype: torch.dtype
     device: torch.device
+
+    @classmethod
+    def compact(
+        cls,
+        spec: AlgebraSpec,
+        *,
+        op: str,
+        input_layout: GradeLayout,
+        output_layout: GradeLayout,
+        dtype: torch.dtype,
+        device,
+    ) -> "UnaryRequest":
+        """Build a normalized request for compact planned execution."""
+        return cls(
+            spec=spec,
+            op=normalize_unary_op(op),
+            input=TensorContract.compact(input_layout.spec, input_layout),
+            output=TensorContract.compact(output_layout.spec, output_layout),
+            dtype=dtype,
+            device=torch.device(device),
+        )
+
+    def __post_init__(self) -> None:
+        self.validate(self.spec)
+
+    def validate(self, spec: AlgebraSpec) -> None:
+        """Validate all contracts against a receiving algebra specification."""
+        if self.spec != spec:
+            raise ValueError(f"request signature {self.spec} does not match algebra signature {spec}")
+        _check_contract_spec(spec, self.input, "input_layout")
+        _check_contract_spec(spec, self.output, "output_layout")
 
     @property
     def input_layout(self) -> GradeLayout:
@@ -91,6 +122,8 @@ class GradeUnaryPlan:
         self.op = op
         self.input_layout = spec.layout(input_grades)
         self.output_layout = spec.layout(output_grades)
+        self.input_contract = TensorContract.compact(spec, self.input_layout)
+        self.output_contract = TensorContract.compact(spec, self.output_layout)
         self.input_positions = input_positions
         self.output_indices = output_indices
         self.signs = signs
@@ -194,7 +227,8 @@ def resolve_unary_output_layout(
 ) -> GradeLayout:
     """Resolve output layout for a planned unary operation."""
     if output_layout is not None:
-        check_layout_spec(spec, output_layout, "output_layout")
+        output_contract = TensorContract.compact(output_layout.spec, output_layout)
+        output_layout = _check_contract_spec(spec, output_contract, "output_layout").layout
         if output_grades is not None and output_layout.grades != normalize_grades(
             output_grades, spec.n, name="output_grades"
         ):

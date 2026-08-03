@@ -59,7 +59,7 @@ def test_bivector_exp_closed_biquadratic_matches_cpu_reference(signature):
     even_layout = algebra.layout(range(0, algebra.n + 1, 2))
     generator = torch.Generator(device=DEVICE).manual_seed(283)
     values = torch.randn(5, bivector_layout.dim, dtype=torch.float64, generator=generator) * 0.25
-    executor = algebra.planner.bivector_exp_executor_for_layouts(
+    executor = algebra.planner.bivector_exp_executor(
         input_layout=bivector_layout,
         output_layout=even_layout,
         dtype=torch.float64,
@@ -83,7 +83,7 @@ def test_bivector_exp_closed_paths_have_finite_zero_gradients():
         algebra = AlgebraContext(*signature, device=DEVICE, dtype=torch.float64)
         bivector_layout = algebra.layout((2,))
         even_layout = algebra.layout(range(0, algebra.n + 1, 2))
-        executor = algebra.planner.bivector_exp_executor_for_layouts(
+        executor = algebra.planner.bivector_exp_executor(
             input_layout=bivector_layout,
             output_layout=even_layout,
             dtype=torch.float64,

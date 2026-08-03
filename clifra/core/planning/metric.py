@@ -9,6 +9,7 @@ import torch
 
 from clifra.core.foundation.basis import operation_coefficient, reverse_sign
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
+from clifra.core.runtime.tensors import TensorContract, _check_contract_spec
 
 
 class SignatureNormSquaredPlan:
@@ -23,6 +24,7 @@ class SignatureNormSquaredPlan:
     ):
         self.spec = spec
         self.input_layout = input_layout
+        self.input_contract = TensorContract.compact(spec, input_layout)
         self.signs = signs
 
     @property
@@ -44,8 +46,8 @@ def build_signature_norm_squared_plan(
     dtype: torch.dtype = torch.float32,
 ) -> SignatureNormSquaredPlan:
     """Build a static diagonal signed norm plan for ``input_layout``."""
-    if input_layout.spec != spec:
-        raise ValueError(f"input_layout signature {input_layout.spec} does not match algebra signature {spec}")
+    input_contract = TensorContract.compact(input_layout.spec, input_layout)
+    input_layout = _check_contract_spec(spec, input_contract, "input_layout").layout
     signs = [
         reverse_sign(index) * operation_coefficient(index, index, spec.p, spec.q, spec.r, "gp")
         for index in input_layout.basis_indices

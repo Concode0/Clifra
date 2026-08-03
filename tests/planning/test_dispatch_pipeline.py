@@ -87,6 +87,19 @@ def test_product_layer_validates_declared_layouts_against_grades():
         ProductLayer(context, left_grades=(2,), left_layout=vector_layout)
 
 
+def test_product_layer_resolves_grade_arguments_to_contracts_and_rejects_foreign_layouts():
+    context = AlgebraContext(p=3, q=0, device="cpu")
+    foreign = AlgebraContext(p=0, q=3, device="cpu")
+    layer = ProductLayer(context, left_grades=(1,), right_grades=(1,), output_grades=(0, 2))
+
+    assert layer.left_contract.layout == context.layout((1,))
+    assert layer.right_contract.layout == context.layout((1,))
+    assert layer.output_contract.layout == context.layout((0, 2))
+
+    with pytest.raises(ValueError, match="left_layout signature .* does not match algebra signature"):
+        ProductLayer(context, left_layout=foreign.layout((1,)))
+
+
 def test_compact_layer_pipeline_trains_with_riemannian_optimizer_factory():
     context = AlgebraContext(p=6, q=0, device="cpu")
     vector_layout = context.layout((1,))

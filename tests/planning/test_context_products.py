@@ -1,6 +1,7 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
+from clifra.core.planning.layouts import ProductRequest
 from tests.planning._grade_plan_helpers import (
     DEVICE,
     AlgebraContext,
@@ -90,45 +91,40 @@ def test_grade_planner_reuses_projected_product_executor():
     algebra = AlgebraContext(4, 1, 1, device=DEVICE, dtype=torch.float64)
     planner = GradePlanner(algebra)
 
-    first = planner.product_executor(
+    request = ProductRequest.compact(
+        planner.spec,
         op="gp",
-        left_grades=(1,),
-        right_grades=(1,),
-        output_grades=(0, 2),
+        left_layout=algebra.layout((1,)),
+        right_layout=algebra.layout((1,)),
+        output_layout=algebra.layout((0, 2)),
         dtype=torch.float64,
         device=DEVICE,
     )
-    second = planner.product_executor(
-        op="gp",
-        left_grades=(1,),
-        right_grades=(1,),
-        output_grades=(0, 2),
-        dtype=torch.float64,
-        device=DEVICE,
-    )
+    first = planner.product_executor(request)
+    second = planner.product_executor(request)
 
     assert first is second
 
 
-def test_algebra_product_executor_returns_preplanned_runtime_handle():
+def test_algebra_plan_product_reuses_preplanned_executor():
     algebra = AlgebraContext(6, 0, device=DEVICE, dtype=torch.float32)
 
-    first = algebra.product_executor(
+    first = algebra.plan_product(
         left_grades=(1,),
         right_grades=(1,),
         output_grades=(0, 2),
     )
-    second = algebra.product_executor(
+    second = algebra.plan_product(
         left_grades=(1,),
         right_grades=(1,),
         output_grades=(0, 2),
     )
 
-    assert first is second
+    assert first.executor is second.executor
     assert first.left_grades == (1,)
     assert first.right_grades == (1,)
     assert first.output_grades == (0, 2)
-    assert first.coefficients.dtype == algebra.dtype
+    assert first.executor.coefficients.dtype == algebra.dtype
 
 
 def test_algebra_plan_product_returns_compact_lane_handle():
@@ -155,16 +151,168 @@ def test_algebra_plan_product_returns_compact_lane_handle():
     )
 
     assert isinstance(handle, ProductPlanHandle)
-    assert handle.executor is algebra.planner.product_executor_for_layouts(
+    assert handle.executor is algebra.plan_product(
         op="gp",
         left_layout=vector_layout,
         right_layout=vector_layout,
         output_layout=output_layout,
         dtype=torch.float32,
         device=DEVICE,
-    )
+    ).executor
     assert handle.output_layout == output_layout
     assert torch.allclose(handle(left, right), expected, atol=1e-6, rtol=1e-6)
+
+
+@pytest.mark.parametrize("warm_cache", [False, True])
+@pytest.mark.parametrize("route", ["projected_product", "plan_product"])
+def test_product_routes_reject_foreign_signatures_with_cold_and_warm_caches(route, warm_cache):
+    algebra = make_algebra(3, 0, 0, device=DEVICE, dtype=torch.float32)
+    foreign = make_algebra(0, 3, 0, device=DEVICE, dtype=torch.float32)
+    own_layouts = {
+        "left_layout": algebra.layout((1,)),
+        "right_layout": algebra.layout((1,)),
+        "output_layout": algebra.layout((0,)),
+    }
+    foreign_layouts = {
+        "left_layout": foreign.layout((1,)),
+        "right_layout": foreign.layout((1,)),
+        "output_layout": foreign.layout((0,)),
+    }
+    if warm_cache:
+        algebra.plan_product(**own_layouts)
+    cache_before = tuple(algebra.planner._product_executors.items())
+
+    with pytest.raises(ValueError, match="left_layout signature .* does not match algebra signature"):
+        if route == "projected_product":
+            values = torch.tensor([[1.0, 0.0, 0.0]])
+            algebra.projected_product(
+                values,
+                values,
+                **foreign_layouts,
+                left_storage=LaneStorage.COMPACT,
+                right_storage=LaneStorage.COMPACT,
+            )
+        else:
+            algebra.plan_product(**foreign_layouts)
+
+    assert tuple(algebra.planner._product_executors.items()) == cache_before
+
+
+@pytest.mark.parametrize("warm_cache", [False, True])
+def test_plan_unary_rejects_foreign_signatures_with_cold_and_warm_caches(warm_cache):
+    algebra = make_algebra(3, 0, 0, device=DEVICE, dtype=torch.float32)
+    foreign = make_algebra(0, 3, 0, device=DEVICE, dtype=torch.float32)
+    if warm_cache:
+        algebra.plan_unary(
+            op="reverse",
+            input_layout=algebra.layout((1,)),
+            output_layout=algebra.layout((1,)),
+        )
+    cache_before = tuple(algebra.planner._unary_executors.items())
+
+    with pytest.raises(ValueError, match="input_layout signature .* does not match algebra signature"):
+        algebra.plan_unary(
+            op="reverse",
+            input_layout=foreign.layout((1,)),
+            output_layout=foreign.layout((1,)),
+        )
+
+    assert tuple(algebra.planner._unary_executors.items()) == cache_before
+
+
+@pytest.mark.parametrize("cache", [False, True])
+def test_unary_executor_rejects_foreign_request_before_cache_lookup(cache):
+    algebra = make_algebra(3, 0, 0, device=DEVICE, dtype=torch.float32)
+    foreign = make_algebra(0, 3, 0, device=DEVICE, dtype=torch.float32)
+    values = torch.zeros(1, 3)
+    foreign_request = foreign.planner.unary_request(
+        values,
+        op="reverse",
+        input_layout=foreign.layout((1,)),
+        output_layout=foreign.layout((1,)),
+    )
+    algebra.plan_unary(
+        op="reverse",
+        input_layout=algebra.layout((1,)),
+        output_layout=algebra.layout((1,)),
+    )
+    cache_before = tuple(algebra.planner._unary_executors.items())
+
+    with pytest.raises(ValueError, match="request signature .* does not match algebra signature"):
+        algebra.planner.unary_executor(foreign_request, cache=cache)
+
+    assert tuple(algebra.planner._unary_executors.items()) == cache_before
+
+
+def test_unary_cache_rekey_rejects_foreign_executor():
+    algebra = make_algebra(3, 0, 0, device=DEVICE, dtype=torch.float32)
+    foreign = make_algebra(4, 0, 0, device=DEVICE, dtype=torch.float32)
+    foreign_executor = foreign.plan_unary(
+        op="reverse",
+        input_layout=foreign.layout((1,)),
+        output_layout=foreign.layout((1,)),
+    ).executor
+    algebra.planner._unary_executors[("foreign",)] = foreign_executor
+
+    with pytest.raises(ValueError, match="input_layout signature .* does not match algebra signature"):
+        algebra._apply(lambda tensor: tensor)
+
+
+def test_plan_unary_accepts_layouts_from_equal_signature_algebra():
+    algebra = make_algebra(3, 0, 0, device=DEVICE, dtype=torch.float32)
+    peer = make_algebra(3, 0, 0, device=DEVICE, dtype=torch.float32)
+    own = algebra.plan_unary(
+        op="reverse",
+        input_layout=algebra.layout((1,)),
+        output_layout=algebra.layout((1,)),
+    )
+    shared = algebra.plan_unary(
+        op="reverse",
+        input_layout=peer.layout((1,)),
+        output_layout=peer.layout((1,)),
+    )
+
+    assert shared.executor is own.executor
+
+
+@pytest.mark.parametrize("warm_cache", [False, True])
+@pytest.mark.parametrize(
+    "route,cache_name,error_role",
+    [
+        ("signature_norm", "_signature_norm_squared_executors", "input_layout"),
+        ("pseudoscalar", "_pseudoscalar_product_executors", "input_layout"),
+        ("bivector_exp", "_bivector_exp_executors", "input_layout"),
+        ("sandwich", "_full_sandwich_action_executors", "layout"),
+    ],
+)
+def test_cached_nonproduct_plans_reject_foreign_contracts_before_lookup(route, cache_name, error_role, warm_cache):
+    algebra = make_algebra(3, 0, 0, device=DEVICE, dtype=torch.float32)
+    foreign = make_algebra(0, 3, 0, device=DEVICE, dtype=torch.float32)
+
+    def plan(source):
+        if route == "signature_norm":
+            return algebra.plan_signature_norm_squared(input_layout=source.layout((1,)))
+        if route == "pseudoscalar":
+            return algebra.plan_pseudoscalar_product(
+                input_layout=source.layout((1,)),
+                output_layout=source.layout((2,)),
+            )
+        if route == "bivector_exp":
+            return algebra.plan_bivector_exp(
+                input_layout=source.layout((2,)),
+                output_layout=source.layout((0, 2)),
+            )
+        return algebra.plan_sandwich_action(layout=source.layout())
+
+    if warm_cache:
+        plan(algebra)
+    cache = getattr(algebra.planner, cache_name)
+    cache_before = tuple(cache.items())
+
+    with pytest.raises(ValueError, match=rf"{error_role} signature .* does not match algebra signature"):
+        plan(foreign)
+
+    assert tuple(cache.items()) == cache_before
 
 
 def test_algebra_plan_unary_signature_pseudoscalar_and_bivector_exp_handles_match_public_routes():
@@ -204,24 +352,24 @@ def test_algebra_plan_unary_signature_pseudoscalar_and_bivector_exp_handles_matc
 
 def test_grade_planner_rebuilds_executor_after_dtype_move():
     algebra = AlgebraContext(4, 1, 1, device=DEVICE, dtype=torch.float64)
-    executor = algebra.planner.product_executor(
+    executor = algebra.plan_product(
         op="gp",
         left_grades=(1,),
         right_grades=(1,),
         output_grades=(0, 2),
         dtype=algebra.dtype,
         device=DEVICE,
-    )
+    ).executor
 
     algebra.to(dtype=torch.float32)
-    moved = algebra.planner.product_executor(
+    moved = algebra.plan_product(
         op="gp",
         left_grades=(1,),
         right_grades=(1,),
         output_grades=(0, 2),
         dtype=algebra.dtype,
         device=DEVICE,
-    )
+    ).executor
 
     assert moved is not executor
     assert moved.coefficients.dtype == torch.float32
@@ -389,12 +537,12 @@ def test_planned_signature_norm_squared_matches_small_oracle_for_full_and_compac
     full = torch.randn(3, context.dim, dtype=torch.float64, generator=generator)
     compact = torch.randn(3, bivector_layout.dim, dtype=torch.float64, generator=generator)
 
-    full_executor = context.planner.signature_norm_squared_executor_for_layout(
+    full_executor = context.planner.signature_norm_squared_executor(
         input_layout=context.layout(),
         dtype=torch.float64,
         device=DEVICE,
     )
-    compact_executor = context.planner.signature_norm_squared_executor_for_layout(
+    compact_executor = context.planner.signature_norm_squared_executor(
         input_layout=bivector_layout,
         dtype=torch.float64,
         device=DEVICE,
@@ -421,12 +569,12 @@ def test_planned_pseudoscalar_product_matches_small_oracle_for_full_and_compact_
     full = torch.randn(3, context.dim, dtype=torch.float64, generator=generator)
     compact = torch.randn(3, vector_layout.dim, dtype=torch.float64, generator=generator)
 
-    full_executor = context.planner.pseudoscalar_product_executor_for_layout(
+    full_executor = context.planner.pseudoscalar_product_executor(
         input_layout=context.layout(),
         dtype=torch.float64,
         device=DEVICE,
     )
-    compact_executor = context.planner.pseudoscalar_product_executor_for_layout(
+    compact_executor = context.planner.pseudoscalar_product_executor(
         input_layout=vector_layout,
         output_layout=trivector_layout,
         dtype=torch.float64,
@@ -458,22 +606,22 @@ def test_planned_contractions_match_small_oracle_for_full_and_compact_layouts():
     vector_values = torch.randn(3, vector_layout.dim, dtype=torch.float64, generator=generator)
     bivector_values = torch.randn(3, bivector_layout.dim, dtype=torch.float64, generator=generator)
 
-    full_executor = context.planner.product_executor_for_layouts(
+    full_executor = context.plan_product(
         op="left_contraction",
         left_layout=context.layout(),
         right_layout=context.layout(),
         output_layout=context.layout(),
         dtype=torch.float64,
         device=DEVICE,
-    )
-    compact_executor = context.planner.product_executor_for_layouts(
+    ).executor
+    compact_executor = context.plan_product(
         op="right_contraction",
         left_layout=bivector_layout,
         right_layout=vector_layout,
         output_layout=vector_layout,
         dtype=torch.float64,
         device=DEVICE,
-    )
+    ).executor
 
     expected_left = oracle.product(
         vector_values,
@@ -791,7 +939,7 @@ def test_context_projected_product_pairwise_mixed_compact_widths():
         output_storage=LaneStorage.COMPACT,
         return_layout=True,
     )
-    executor = algebra.product_executor(
+    handle = algebra.plan_product(
         op="wedge",
         left_grades=(2,),
         right_grades=(1,),
@@ -802,7 +950,7 @@ def test_context_projected_product_pairwise_mixed_compact_widths():
 
     assert output_layout.grades == (3,)
     assert values.shape == (3, 4, output_layout.dim)
-    assert torch.allclose(values, executor.forward_pairwise_compact(left, right), atol=1e-6, rtol=1e-6)
+    assert torch.allclose(values, handle.pairwise(left, right), atol=1e-6, rtol=1e-6)
 
 
 def test_context_projected_product_suggests_pairwise_for_mismatched_item_axes():

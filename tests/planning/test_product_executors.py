@@ -1,6 +1,8 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
+from clifra.core.planning.layouts import ProductRequest
+from clifra.core.runtime.tensors import TensorContract
 from tests.planning._grade_plan_helpers import (
     DEVICE,
     AlgebraContext,
@@ -48,6 +50,122 @@ from tests.planning._grade_plan_helpers import (
 )
 
 pytestmark = pytest.mark.unit
+
+
+def _compact_product_request(algebra, *, op, left_layout, right_layout, output_layout):
+    return ProductRequest.compact(
+        algebra.planner.spec,
+        op=op,
+        left_layout=left_layout,
+        right_layout=right_layout,
+        output_layout=output_layout,
+        dtype=algebra.dtype,
+        device=algebra.device,
+    )
+
+
+@pytest.mark.parametrize("warm_cache", [False, True])
+@pytest.mark.parametrize("foreign_side", ["left", "right", "output"])
+def test_product_request_rejects_foreign_layouts_before_cache_lookup(
+    foreign_side,
+    warm_cache,
+):
+    algebra = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float32)
+    foreign = AlgebraContext(0, 3, 0, device=DEVICE, dtype=torch.float32)
+    layouts = {
+        "left_layout": algebra.layout((1,)),
+        "right_layout": algebra.layout((1,)),
+        "output_layout": algebra.layout((0,)),
+    }
+    if warm_cache:
+        algebra.planner.product_executor(_compact_product_request(algebra, op="gp", **layouts))
+    cache_before = tuple(algebra.planner._product_executors.items())
+    layouts[f"{foreign_side}_layout"] = foreign.layout((0,) if foreign_side == "output" else (1,))
+
+    with pytest.raises(ValueError, match=rf"{foreign_side}_layout signature .* does not match algebra signature"):
+        algebra.planner.product_executor(_compact_product_request(algebra, op="gp", **layouts))
+
+    assert tuple(algebra.planner._product_executors.items()) == cache_before
+
+
+def test_product_request_rejects_foreign_tensor_contracts_at_construction():
+    algebra = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float32)
+    foreign = AlgebraContext(0, 3, 0, device=DEVICE, dtype=torch.float32)
+    own_layouts = {
+        "left_layout": algebra.layout((1,)),
+        "right_layout": algebra.layout((1,)),
+        "output_layout": algebra.layout((0,)),
+    }
+    algebra.planner.product_executor(_compact_product_request(algebra, op="gp", **own_layouts))
+    cache_before = tuple(algebra.planner._product_executors.items())
+    with pytest.raises(ValueError, match="left_layout signature .* does not match algebra signature"):
+        ProductRequest(
+            spec=algebra.planner.spec,
+            op="gp",
+            left=TensorContract.compact(foreign.planner.spec, foreign.layout((1,))),
+            right=TensorContract.compact(foreign.planner.spec, foreign.layout((1,))),
+            output=TensorContract.compact(foreign.planner.spec, foreign.layout((0,))),
+            dtype=torch.float32,
+            device=torch.device(DEVICE),
+        )
+
+    assert tuple(algebra.planner._product_executors.items()) == cache_before
+
+
+@pytest.mark.parametrize("cache", [False, True])
+def test_product_executor_rejects_foreign_request_signature(cache):
+    algebra = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float32)
+    foreign = AlgebraContext(0, 3, 0, device=DEVICE, dtype=torch.float32)
+    values = torch.zeros(1, 3)
+    request = foreign.planner.product_request(
+        values,
+        values,
+        left_layout=foreign.layout((1,)),
+        right_layout=foreign.layout((1,)),
+        output_layout=foreign.layout((0,)),
+    )
+
+    cache_before = tuple(algebra.planner._product_executors.items())
+
+    with pytest.raises(ValueError, match="request signature .* does not match algebra signature"):
+        algebra.planner.product_executor(request, cache=cache)
+
+    assert tuple(algebra.planner._product_executors.items()) == cache_before
+
+
+def test_product_executor_accepts_layouts_from_equal_signature_algebra():
+    algebra = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float32)
+    peer = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float32)
+    own = algebra.planner.product_executor(_compact_product_request(
+        algebra,
+        op="gp",
+        left_layout=algebra.layout((1,)),
+        right_layout=algebra.layout((1,)),
+        output_layout=algebra.layout((0,)),
+    ))
+
+    shared = algebra.planner.product_executor(_compact_product_request(
+        algebra,
+        op="gp",
+        left_layout=peer.layout((1,)),
+        right_layout=peer.layout((1,)),
+        output_layout=peer.layout((0,)),
+    ))
+
+    assert shared is own
+
+
+def test_planner_conversion_rejects_mutually_consistent_foreign_layouts():
+    algebra = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float32)
+    foreign = AlgebraContext(0, 3, 0, device=DEVICE, dtype=torch.float32)
+    values = torch.zeros(2, foreign.layout((1,)).dim)
+
+    with pytest.raises(ValueError, match="source_layout signature .* does not match algebra signature"):
+        algebra.planner.convert_values(
+            values,
+            source_layout=foreign.layout((1,)),
+            target_layout=foreign.layout((1, 2)),
+        )
 
 
 @pytest.mark.parametrize(
@@ -212,14 +330,13 @@ def test_planner_full_table_executor_matches_small_oracle_full_layout_product(op
     left = torch.randn(3, context.dim, dtype=torch.float64, generator=generator)
     right = torch.randn(3, context.dim, dtype=torch.float64, generator=generator)
 
-    executor = context.planner.product_executor_for_layouts(
+    executor = context.planner.product_executor(_compact_product_request(
+        context,
         op=op,
         left_layout=full_layout,
         right_layout=full_layout,
         output_layout=full_layout,
-        dtype=torch.float64,
-        device=DEVICE,
-    )
+    ))
     actual = getattr(context, _product_method_name(op))(left, right)
     expected = oracle.product(left, right, op=op)
 
@@ -246,14 +363,13 @@ def test_product_executor_policy_selects_sparse_for_pruned_full_layout_wedge():
         dtype=torch.float64,
         device=DEVICE,
     )
-    executor = context.planner.product_executor_for_layouts(
+    executor = context.planner.product_executor(_compact_product_request(
+        context,
         op="wedge",
         left_layout=full_layout,
         right_layout=full_layout,
         output_layout=full_layout,
-        dtype=torch.float64,
-        device=DEVICE,
-    )
+    ))
 
     assert cost.executor_family == "sparse"
     assert cost.sparse_score < cost.full_table_score
@@ -275,14 +391,13 @@ def test_product_executor_policy_override_can_force_full_table_full_layout_wedge
         dtype=torch.float64,
         device=DEVICE,
     )
-    executor = context.planner.product_executor_for_layouts(
+    executor = context.planner.product_executor(_compact_product_request(
+        context,
         op="wedge",
         left_layout=full_layout,
         right_layout=full_layout,
         output_layout=full_layout,
-        dtype=torch.float64,
-        device=DEVICE,
-    )
+    ))
 
     assert cost.executor_family == "full_table"
     assert cost.full_table_score < cost.sparse_score
@@ -321,11 +436,9 @@ def test_direct_product_executor_obeys_static_pair_limits():
     algebra = make_algebra(16, 0, 0, device=DEVICE, dtype=torch.float32, planning_limits=limits)
 
     with pytest.raises(ValueError, match="basis interactions"):
-        algebra.planner.product_executor(
+        algebra.plan_product(
             op="gp",
             left_grades=(1,),
             right_grades=(1,),
             output_grades=(0, 2),
-            dtype=torch.float32,
-            device=DEVICE,
         )

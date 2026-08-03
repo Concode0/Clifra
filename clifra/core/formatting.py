@@ -15,6 +15,7 @@ from typing import Iterable, Optional, Sequence
 import torch
 
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
+from clifra.core.runtime.tensors import resolve_contract
 
 
 @dataclass(frozen=True)
@@ -128,9 +129,7 @@ def _basis_indices_for_values(
 ) -> tuple[int, ...]:
     spec = AlgebraSpec.from_algebra(algebra)
     if layout is not None:
-        if layout.spec != spec:
-            raise ValueError(f"layout signature {layout.spec} does not match algebra signature {spec}")
-        return layout.basis_indices
+        return resolve_contract(algebra, layout=layout).layout.basis_indices
     if grades is not None:
         return algebra.layout(grades).basis_indices
     if values.shape[-1] == spec.dim:

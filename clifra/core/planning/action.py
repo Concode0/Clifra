@@ -5,10 +5,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from clifra.core.foundation.basis import expand_output_grades
-from clifra.core.foundation.layout import GradeLayout
+from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
+from clifra.core.runtime.tensors import TensorContract, _check_contract_spec
 
 
 @dataclass(frozen=True)
@@ -17,6 +18,14 @@ class LinearActionPlan:
 
     input_layout: GradeLayout
     output_layout: GradeLayout
+    input_contract: TensorContract = field(init=False, repr=False)
+    output_contract: TensorContract = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        spec = self.input_layout.spec
+        object.__setattr__(self, "input_contract", TensorContract.compact(spec, self.input_layout))
+        output_contract = TensorContract.compact(self.output_layout.spec, self.output_layout)
+        object.__setattr__(self, "output_contract", _check_contract_spec(spec, output_contract, "output_layout"))
 
     @property
     def input_grades(self) -> tuple[int, ...]:
@@ -37,6 +46,21 @@ class VersorActionPlan:
     input_layout: GradeLayout
     output_layout: GradeLayout
     parameter_layout: GradeLayout
+    input_contract: TensorContract = field(init=False, repr=False)
+    output_contract: TensorContract = field(init=False, repr=False)
+    parameter_contract: TensorContract = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        spec = self.input_layout.spec
+        object.__setattr__(self, "input_contract", TensorContract.compact(spec, self.input_layout))
+        for role in ("output", "parameter"):
+            layout = getattr(self, f"{role}_layout")
+            contract = TensorContract.compact(layout.spec, layout)
+            object.__setattr__(
+                self,
+                f"{role}_contract",
+                _check_contract_spec(spec, contract, f"{role}_layout"),
+            )
 
     @property
     def linear_action(self) -> LinearActionPlan:
@@ -53,6 +77,23 @@ class PairedBivectorActionPlan:
     parameter_layout: GradeLayout
     rotor_layout: GradeLayout
     middle_layout: GradeLayout
+    input_contract: TensorContract = field(init=False, repr=False)
+    output_contract: TensorContract = field(init=False, repr=False)
+    parameter_contract: TensorContract = field(init=False, repr=False)
+    rotor_contract: TensorContract = field(init=False, repr=False)
+    middle_contract: TensorContract = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        spec = self.input_layout.spec
+        object.__setattr__(self, "input_contract", TensorContract.compact(spec, self.input_layout))
+        for role in ("output", "parameter", "rotor", "middle"):
+            layout = getattr(self, f"{role}_layout")
+            contract = TensorContract.compact(layout.spec, layout)
+            object.__setattr__(
+                self,
+                f"{role}_contract",
+                _check_contract_spec(spec, contract, f"{role}_layout"),
+            )
 
     @property
     def input_grades(self) -> tuple[int, ...]:
@@ -71,10 +112,12 @@ def build_linear_action_plan(
     output_layout: GradeLayout | None = None,
 ) -> LinearActionPlan:
     """Build a plan-only linear action contract."""
+    spec = input_layout.spec
+    input_contract = TensorContract.compact(spec, input_layout)
     output_layout = input_layout if output_layout is None else output_layout
-    if input_layout.spec != output_layout.spec:
-        raise ValueError(f"layout mismatch: {input_layout.spec} vs {output_layout.spec}")
-    return LinearActionPlan(input_layout=input_layout, output_layout=output_layout)
+    output_contract = TensorContract.compact(output_layout.spec, output_layout)
+    _check_contract_spec(spec, output_contract, "output_layout")
+    return LinearActionPlan(input_layout=input_contract.layout, output_layout=output_contract.layout)
 
 
 def build_versor_action_plan(
@@ -86,20 +129,28 @@ def build_versor_action_plan(
     parameter_layout: GradeLayout | None = None,
 ) -> VersorActionPlan:
     """Build a plan-only versor action contract."""
+    spec = AlgebraSpec.from_algebra(algebra)
     grade = int(grade)
     if grade not in {1, 2}:
         raise ValueError("planned versor actions currently support grade=1 and grade=2")
     output_layout = input_layout if output_layout is None else output_layout
     parameter_layout = algebra.layout((grade,)) if parameter_layout is None else parameter_layout
-    if input_layout.spec != output_layout.spec or input_layout.spec != parameter_layout.spec:
-        raise ValueError("input, output, and parameter layouts must share one algebra spec")
+    input_contract = _check_contract_spec(
+        spec, TensorContract.compact(input_layout.spec, input_layout), "input_layout"
+    )
+    output_contract = _check_contract_spec(
+        spec, TensorContract.compact(output_layout.spec, output_layout), "output_layout"
+    )
+    parameter_contract = _check_contract_spec(
+        spec, TensorContract.compact(parameter_layout.spec, parameter_layout), "parameter_layout"
+    )
     if parameter_layout.grades != (grade,):
         raise ValueError(f"parameter_layout must contain grade {grade}, got {parameter_layout.grades}")
     return VersorActionPlan(
         grade=grade,
-        input_layout=input_layout,
-        output_layout=output_layout,
-        parameter_layout=parameter_layout,
+        input_layout=input_contract.layout,
+        output_layout=output_contract.layout,
+        parameter_layout=parameter_contract.layout,
     )
 
 
@@ -117,10 +168,16 @@ def build_paired_bivector_action_plan(
     output layout through both geometric products and lets callers explicitly
     project with ``output_layout`` when they want a narrower result.
     """
-    spec = input_layout.spec
+    spec = AlgebraSpec.from_algebra(algebra)
     parameter_layout = algebra.layout((2,)) if parameter_layout is None else parameter_layout
-    if input_layout.spec != parameter_layout.spec:
-        raise ValueError("input and parameter layouts must share one algebra spec")
+    input_contract = _check_contract_spec(
+        spec, TensorContract.compact(input_layout.spec, input_layout), "input_layout"
+    )
+    parameter_contract = _check_contract_spec(
+        spec, TensorContract.compact(parameter_layout.spec, parameter_layout), "parameter_layout"
+    )
+    input_layout = input_contract.layout
+    parameter_layout = parameter_contract.layout
     if parameter_layout.grades != (2,):
         raise ValueError(f"parameter_layout must contain grade 2, got {parameter_layout.grades}")
 
@@ -129,11 +186,12 @@ def build_paired_bivector_action_plan(
     middle_layout = spec.layout(middle_grades)
     inferred_output = spec.layout(expand_output_grades(middle_layout.grades, rotor_layout.grades, spec.n, op="gp"))
     output_layout = inferred_output if output_layout is None else output_layout
-    if output_layout.spec != spec:
-        raise ValueError(f"output layout signature {output_layout.spec} does not match input signature {spec}")
+    output_contract = _check_contract_spec(
+        spec, TensorContract.compact(output_layout.spec, output_layout), "output_layout"
+    )
     return PairedBivectorActionPlan(
         input_layout=input_layout,
-        output_layout=output_layout,
+        output_layout=output_contract.layout,
         parameter_layout=parameter_layout,
         rotor_layout=rotor_layout,
         middle_layout=middle_layout,

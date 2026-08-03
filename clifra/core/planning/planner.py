@@ -44,9 +44,8 @@ from clifra.core.planning.unary import (
     UnaryRequest,
     build_unary_plan_from_request,
     build_unary_request,
-    normalize_unary_op,
 )
-from clifra.core.runtime.tensors import LaneStorage, TensorContract
+from clifra.core.runtime.tensors import LaneStorage, TensorContract, _check_contract_spec
 
 
 class GradePlanner:
@@ -83,6 +82,8 @@ class GradePlanner:
 
     def convert_values(self, values: torch.Tensor, *, source_layout: GradeLayout, target_layout: GradeLayout):
         """Convert compact values between layouts without full-lane materialization."""
+        source_layout = self._compact_contract(source_layout, "source_layout").layout
+        target_layout = self._compact_contract(target_layout, "target_layout").layout
         return target_layout.convert(values, source_layout)
 
     def bivector_squared_signs(self, *, device=None, dtype: torch.dtype = None) -> torch.Tensor:
@@ -155,34 +156,26 @@ class GradePlanner:
 
     def product_executor(
         self,
+        request: ProductRequest,
         *,
-        op: str,
-        left_grades,
-        right_grades,
-        output_grades,
-        dtype,
-        device,
         cache: bool = True,
-    ):
-        """Return a cached static executor for a projected bilinear product."""
-        left_grades, right_grades, output_grades = validate_product_grades_cost(
-            self.algebra,
-            self.spec,
-            op=op,
-            left_grades=left_grades,
-            right_grades=right_grades,
-            output_grades=output_grades,
-        )
-        request = ProductRequest(
-            spec=self.spec,
-            op=normalize_product_op(op),
-            left=TensorContract.compact(self.spec, self.layout(left_grades)),
-            right=TensorContract.compact(self.spec, self.layout(right_grades)),
-            output=TensorContract.compact(self.spec, self.layout(output_grades)),
-            dtype=dtype,
-            device=torch.device(device),
-        )
-        return self.product_executor_for_request(request, cache=cache)
+    ) -> FullTableProductExecutor | GradeProductExecutor:
+        """Return the cached executor for one normalized product request."""
+        request.validate(self.spec)
+        validate_product_request(self.algebra, request)
+        family = self._product_executor_family(request)
+        key = self._product_request_cache_key(request, family)
+        executor = self._product_executors.get(key) if cache else None
+        if executor is None:
+            if family == "full_table":
+                plan = build_full_table_product_plan_from_request(request)
+                executor = FullTableProductExecutor(plan)
+            else:
+                plan = build_grade_product_plan_from_request(request)
+                executor = GradeProductExecutor(plan)
+            if cache:
+                self._product_executors[key] = executor
+        return executor
 
     def product_request(
         self,
@@ -201,6 +194,12 @@ class GradePlanner:
         output_storage: LaneStorage | str = LaneStorage.COMPACT,
     ) -> ProductRequest:
         """Normalize product intent into a static request without executing tensors."""
+        if left_layout is not None:
+            left_layout = self._compact_contract(left_layout, "left_layout").layout
+        if right_layout is not None:
+            right_layout = self._compact_contract(right_layout, "right_layout").layout
+        if output_layout is not None:
+            output_layout = self._compact_contract(output_layout, "output_layout").layout
         left_grades = self._default_operand_grades(left_grades, left_layout)
         right_grades = self._default_operand_grades(right_grades, right_layout)
         self._validate_product_grade_cost_before_layouts(
@@ -229,71 +228,6 @@ class GradePlanner:
         )
         validate_product_request(self.algebra, request)
         return request
-
-    def product_executor_for_request(
-        self, request: ProductRequest, *, cache: bool = True
-    ) -> FullTableProductExecutor | GradeProductExecutor:
-        """Return an executor for an already normalized product request."""
-        validate_product_request(self.algebra, request)
-        family = self._product_executor_family(request)
-        key = self._product_request_cache_key(request, family)
-        executor = self._product_executors.get(key) if cache else None
-        if executor is None:
-            if family == "full_table":
-                plan = build_full_table_product_plan_from_request(request)
-                executor = FullTableProductExecutor(plan)
-            else:
-                plan = build_grade_product_plan_from_request(request)
-                executor = GradeProductExecutor(plan)
-            if cache:
-                self._product_executors[key] = executor
-        return executor
-
-    def product_executor_for_layouts(
-        self,
-        *,
-        op: str,
-        left_layout: GradeLayout,
-        right_layout: GradeLayout,
-        output_layout: GradeLayout,
-        dtype: torch.dtype,
-        device,
-        cache: bool = True,
-    ) -> FullTableProductExecutor | GradeProductExecutor:
-        """Return a cached executor when layout resolution is already complete."""
-        normalized_op = normalize_product_op(op)
-        resolved_device = torch.device(device)
-        family = self._product_executor_family_for_layouts(
-            op=normalized_op,
-            left_layout=left_layout,
-            right_layout=right_layout,
-            output_layout=output_layout,
-            dtype=dtype,
-            device=resolved_device,
-        )
-        key = (
-            self.spec,
-            str(resolved_device),
-            str(dtype),
-            family,
-            normalized_op,
-            left_layout.grades,
-            right_layout.grades,
-            output_layout.grades,
-        )
-        executor = self._product_executors.get(key) if cache else None
-        if executor is None:
-            request = ProductRequest(
-                spec=self.spec,
-                op=normalized_op,
-                left=TensorContract.compact(self.spec, left_layout),
-                right=TensorContract.compact(self.spec, right_layout),
-                output=TensorContract.compact(self.spec, output_layout),
-                dtype=dtype,
-                device=resolved_device,
-            )
-            executor = self.product_executor_for_request(request, cache=cache)
-        return executor
 
     def product_tree(self, *, op: str, left_grades, right_grades, output_grades=None):
         """Return planner-only grade tree metadata for a product route."""
@@ -336,47 +270,23 @@ class GradePlanner:
 
     def unary_executor(
         self,
+        request: UnaryRequest,
         *,
-        op: str,
-        input_grades,
-        output_grades=None,
-        dtype,
-        device,
         cache: bool = True,
     ) -> GradeUnaryExecutor:
-        """Return a cached static executor for a unary operation."""
-        op = normalize_unary_op(op)
-        if op == "grade_projection" and output_grades is None:
-            raise ValueError("output_grades is required for grade_projection")
-        input_layout = self.layout(input_grades)
-        output_layout = input_layout if output_grades is None else self.layout(output_grades)
-        request = UnaryRequest(
-            spec=self.spec,
-            op=op,
-            input=TensorContract.compact(self.spec, input_layout),
-            output=TensorContract.compact(self.spec, output_layout),
-            dtype=dtype,
-            device=torch.device(device),
-        )
-        return self.unary_executor_for_request(request, cache=cache)
+        """Return the cached executor for one normalized unary request."""
+        request.validate(self.spec)
+        validate_unary_request(self.algebra, request)
+        key = request.cache_key
+        executor = self._unary_executors.get(key) if cache else None
+        if executor is None:
+            plan = build_unary_plan_from_request(request)
+            executor = GradeUnaryExecutor(plan)
+            if cache:
+                self._unary_executors[key] = executor
+        return executor
 
     def signature_norm_squared_executor(
-        self,
-        *,
-        input_grades,
-        dtype,
-        device,
-        cache: bool = True,
-    ) -> SignatureNormSquaredExecutor:
-        """Return a cached diagonal executor for signed signature norm squared."""
-        return self.signature_norm_squared_executor_for_layout(
-            input_layout=self.layout(input_grades),
-            dtype=dtype,
-            device=device,
-            cache=cache,
-        )
-
-    def signature_norm_squared_executor_for_layout(
         self,
         *,
         input_layout: GradeLayout,
@@ -385,8 +295,7 @@ class GradePlanner:
         cache: bool = True,
     ) -> SignatureNormSquaredExecutor:
         """Return a cached signed signature-norm executor for a resolved layout."""
-        if input_layout.spec != self.spec:
-            raise ValueError(f"input_layout signature {input_layout.spec} does not match algebra signature {self.spec}")
+        input_layout = self._compact_contract(input_layout, "input_layout").layout
         resolved_device = torch.device(device)
         key = (
             self.spec,
@@ -408,7 +317,7 @@ class GradePlanner:
                 self._signature_norm_squared_executors[key] = executor
         return executor
 
-    def pseudoscalar_product_executor_for_layout(
+    def pseudoscalar_product_executor(
         self,
         *,
         input_layout: GradeLayout,
@@ -418,12 +327,10 @@ class GradePlanner:
         cache: bool = True,
     ) -> PseudoscalarProductExecutor:
         """Return a cached right-pseudoscalar product permutation executor."""
-        if input_layout.spec != self.spec:
-            raise ValueError(f"input_layout signature {input_layout.spec} does not match algebra signature {self.spec}")
+        input_layout = self._compact_contract(input_layout, "input_layout").layout
         if output_layout is None:
             output_layout = self.spec.layout(tuple(self.spec.n - grade for grade in input_layout.grades))
-        if output_layout.spec != self.spec:
-            raise ValueError(f"output_layout signature {output_layout.spec} does not match algebra signature {self.spec}")
+        output_layout = self._compact_contract(output_layout, "output_layout").layout
         resolved_device = torch.device(device)
         key = (
             self.spec,
@@ -447,7 +354,7 @@ class GradePlanner:
                 self._pseudoscalar_product_executors[key] = executor
         return executor
 
-    def bivector_exp_executor_for_layouts(
+    def bivector_exp_executor(
         self,
         *,
         input_layout: GradeLayout,
@@ -464,10 +371,8 @@ class GradePlanner:
         spectral_allow_truncated_degenerate: bool | None = None,
     ) -> BivectorExpExecutor:
         """Return a cached executor for the bivector exponential ``exp(B)``."""
-        if input_layout.spec != self.spec:
-            raise ValueError(f"input_layout signature {input_layout.spec} does not match algebra signature {self.spec}")
-        if output_layout.spec != self.spec:
-            raise ValueError(f"output_layout signature {output_layout.spec} does not match algebra signature {self.spec}")
+        input_layout = self._compact_contract(input_layout, "input_layout").layout
+        output_layout = self._compact_contract(output_layout, "output_layout").layout
         if input_layout.grades != (2,):
             raise ValueError(f"bivector exp requires grade-2 input layout, got {input_layout.grades}")
         resolved_device = torch.device(device)
@@ -527,44 +432,56 @@ class GradePlanner:
             bivector_grade4_product = None
             if plan.executor_family in {"left_matrix_exp", "cpu_matrix_exp"}:
                 product_device = torch.device("cpu") if plan.executor_family == "cpu_matrix_exp" else resolved_device
-                left_product = self.product_executor_for_layouts(
-                    op="gp",
-                    left_layout=plan.input_layout,
-                    right_layout=plan.operator_layout,
-                    output_layout=plan.operator_layout,
-                    dtype=dtype,
-                    device=product_device,
+                left_product = self.product_executor(
+                    ProductRequest.compact(
+                        self.spec,
+                        op="gp",
+                        left_layout=plan.input_layout,
+                        right_layout=plan.operator_layout,
+                        output_layout=plan.operator_layout,
+                        dtype=dtype,
+                        device=product_device,
+                    ),
                     cache=cache,
                 )
             elif plan.executor_family == "closed_biquadratic":
                 if plan.grade4_layout is None:
                     raise RuntimeError("closed_biquadratic bivector exp requires a grade-4 layout")
                 scalar_layout = self.spec.layout((0,))
-                bivector_wedge = self.product_executor_for_layouts(
-                    op="wedge",
-                    left_layout=plan.input_layout,
-                    right_layout=plan.input_layout,
-                    output_layout=plan.grade4_layout,
-                    dtype=dtype,
-                    device=resolved_device,
+                bivector_wedge = self.product_executor(
+                    ProductRequest.compact(
+                        self.spec,
+                        op="wedge",
+                        left_layout=plan.input_layout,
+                        right_layout=plan.input_layout,
+                        output_layout=plan.grade4_layout,
+                        dtype=dtype,
+                        device=resolved_device,
+                    ),
                     cache=cache,
                 )
-                grade4_square = self.product_executor_for_layouts(
-                    op="gp",
-                    left_layout=plan.grade4_layout,
-                    right_layout=plan.grade4_layout,
-                    output_layout=scalar_layout,
-                    dtype=dtype,
-                    device=resolved_device,
+                grade4_square = self.product_executor(
+                    ProductRequest.compact(
+                        self.spec,
+                        op="gp",
+                        left_layout=plan.grade4_layout,
+                        right_layout=plan.grade4_layout,
+                        output_layout=scalar_layout,
+                        dtype=dtype,
+                        device=resolved_device,
+                    ),
                     cache=cache,
                 )
-                bivector_grade4_product = self.product_executor_for_layouts(
-                    op="gp",
-                    left_layout=plan.input_layout,
-                    right_layout=plan.grade4_layout,
-                    output_layout=plan.output_layout,
-                    dtype=dtype,
-                    device=resolved_device,
+                bivector_grade4_product = self.product_executor(
+                    ProductRequest.compact(
+                        self.spec,
+                        op="gp",
+                        left_layout=plan.input_layout,
+                        right_layout=plan.grade4_layout,
+                        output_layout=plan.output_layout,
+                        dtype=dtype,
+                        device=resolved_device,
+                    ),
                     cache=cache,
                 )
             executor = BivectorExpExecutor(
@@ -578,7 +495,7 @@ class GradePlanner:
                 self._bivector_exp_executors[key] = executor
         return executor
 
-    def full_sandwich_action_executor_for_layout(
+    def full_sandwich_action_executor(
         self,
         *,
         layout: GradeLayout,
@@ -587,8 +504,7 @@ class GradePlanner:
         cache: bool = True,
     ) -> FullSandwichActionExecutor:
         """Return a cached full-layout sandwich action executor."""
-        if layout.spec != self.spec:
-            raise ValueError(f"layout signature {layout.spec} does not match algebra signature {self.spec}")
+        layout = self._compact_contract(layout, "layout").layout
         full_grades = tuple(range(self.spec.n + 1))
         if layout.grades != full_grades:
             raise ValueError(f"full sandwich action requires full layout {full_grades}, got {layout.grades}")
@@ -614,6 +530,9 @@ class GradePlanner:
         output_layout: GradeLayout = None,
     ) -> LinearActionPlan:
         """Return a plan-only contract for a grade-preserving linear action."""
+        input_layout = self._compact_contract(input_layout, "input_layout").layout
+        if output_layout is not None:
+            output_layout = self._compact_contract(output_layout, "output_layout").layout
         return build_linear_action_plan(input_layout=input_layout, output_layout=output_layout)
 
     def versor_action_plan(
@@ -625,6 +544,11 @@ class GradePlanner:
         parameter_layout: GradeLayout = None,
     ) -> VersorActionPlan:
         """Return a plan-only contract for a grade-1 or grade-2 versor action."""
+        input_layout = self._compact_contract(input_layout, "input_layout").layout
+        if output_layout is not None:
+            output_layout = self._compact_contract(output_layout, "output_layout").layout
+        if parameter_layout is not None:
+            parameter_layout = self._compact_contract(parameter_layout, "parameter_layout").layout
         return build_versor_action_plan(
             self.algebra,
             grade=grade,
@@ -641,6 +565,11 @@ class GradePlanner:
         parameter_layout: GradeLayout = None,
     ) -> PairedBivectorActionPlan:
         """Return a plan-only contract for independent bivector rotor pairs."""
+        input_layout = self._compact_contract(input_layout, "input_layout").layout
+        if output_layout is not None:
+            output_layout = self._compact_contract(output_layout, "output_layout").layout
+        if parameter_layout is not None:
+            parameter_layout = self._compact_contract(parameter_layout, "parameter_layout").layout
         return build_paired_bivector_action_plan(
             self.algebra,
             input_layout=input_layout,
@@ -648,18 +577,10 @@ class GradePlanner:
             parameter_layout=parameter_layout,
         )
 
-    def unary_executor_for_request(self, request: UnaryRequest, *, cache: bool = True) -> GradeUnaryExecutor:
-        """Return an executor for an already normalized unary request."""
-        key = request.cache_key
-        executor = self._unary_executors.get(key) if cache else None
-        if executor is None:
-            plan = build_unary_plan_from_request(request)
-            executor = GradeUnaryExecutor(plan)
-            if cache:
-                self._unary_executors[key] = executor
-        return executor
-
     def _product_cache_key(self, executor: FullTableProductExecutor | GradeProductExecutor) -> tuple[object, ...]:
+        self._compact_contract(executor.left_layout, "left_layout")
+        self._compact_contract(executor.right_layout, "right_layout")
+        self._compact_contract(executor.output_layout, "output_layout")
         buffer = getattr(executor, "coefficients", None)
         if buffer is None:
             buffer = executor.signs
@@ -698,28 +619,9 @@ class GradePlanner:
         )
         return cost.executor_family
 
-    def _product_executor_family_for_layouts(
-        self,
-        *,
-        op: str,
-        left_layout: GradeLayout,
-        right_layout: GradeLayout,
-        output_layout: GradeLayout,
-        dtype: torch.dtype,
-        device,
-    ) -> str:
-        cost = estimate_product_executor_cost(
-            self.algebra,
-            op=op,
-            left_layout=left_layout,
-            right_layout=right_layout,
-            output_layout=output_layout,
-            dtype=dtype,
-            device=device,
-        )
-        return cost.executor_family
-
     def _unary_cache_key(self, executor: GradeUnaryExecutor) -> tuple[object, ...]:
+        self._compact_contract(executor.input_layout, "input_layout")
+        self._compact_contract(executor.output_layout, "output_layout")
         return (
             self.spec,
             str(executor.signs.device),
@@ -730,6 +632,7 @@ class GradePlanner:
         )
 
     def _signature_norm_squared_cache_key(self, executor: SignatureNormSquaredExecutor) -> tuple[object, ...]:
+        self._compact_contract(executor.input_layout, "input_layout")
         return (
             self.spec,
             str(executor.signs.device),
@@ -739,6 +642,8 @@ class GradePlanner:
         )
 
     def _pseudoscalar_product_cache_key(self, executor: PseudoscalarProductExecutor) -> tuple[object, ...]:
+        self._compact_contract(executor.input_layout, "input_layout")
+        self._compact_contract(executor.output_layout, "output_layout")
         return (
             self.spec,
             str(executor.signs.device),
@@ -747,9 +652,9 @@ class GradePlanner:
             executor.input_layout.grades,
             executor.output_layout.grades,
         )
-
-
     def _bivector_exp_cache_key(self, executor: BivectorExpExecutor) -> tuple[object, ...]:
+        self._compact_contract(executor.input_layout, "input_layout")
+        self._compact_contract(executor.output_layout, "output_layout")
         return (
             self.spec,
             str(executor.operator_eye.device),
@@ -768,6 +673,7 @@ class GradePlanner:
         )
 
     def _full_sandwich_action_cache_key(self, executor: FullSandwichActionExecutor) -> tuple[object, ...]:
+        self._compact_contract(executor.layout, "layout")
         return (
             self.spec,
             str(executor.cayley_indices.device),
@@ -780,6 +686,10 @@ class GradePlanner:
         if grades is not None or layout is not None:
             return grades
         return getattr(self.algebra, "_default_grades", None)
+
+    def _compact_contract(self, layout: GradeLayout, name: str) -> TensorContract:
+        contract = TensorContract.compact(layout.spec, layout)
+        return _check_contract_spec(self.spec, contract, name)
 
     def _validate_product_grade_cost_before_layouts(
         self,

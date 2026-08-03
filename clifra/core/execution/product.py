@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 
 from clifra.core.planning.product import FullTableProductPlan, GradeProductPlan
+from clifra.core.runtime.tensors import TensorContract
 
 
 class GradeProductExecutor(nn.Module):
@@ -33,6 +34,11 @@ class GradeProductExecutor(nn.Module):
         self.left_layout = plan.left_layout
         self.right_layout = plan.right_layout
         self.output_layout = plan.output_layout
+        self.left_contract = plan.left_contract
+        self.right_contract = plan.right_contract
+        self.output_contract = plan.output_contract
+        self.left_canonical_contract = TensorContract.canonical(plan.spec, self.left_layout)
+        self.right_canonical_contract = TensorContract.canonical(plan.spec, self.right_layout)
         self._output_dim = plan.output_dim
         self._pair_count = plan.pair_count
         self.register_buffer("left_indices", plan.left_indices, persistent=False)
@@ -59,10 +65,8 @@ class GradeProductExecutor(nn.Module):
 
     def forward(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         """Return compact grade-lane output for full-layout input tensors."""
-        if left.shape[-1] != self.dim:
-            raise ValueError(f"left last dimension must be {self.dim}, got {left.shape[-1]}")
-        if right.shape[-1] != self.dim:
-            raise ValueError(f"right last dimension must be {self.dim}, got {right.shape[-1]}")
+        self.left_canonical_contract.validate(left, name="left")
+        self.right_canonical_contract.validate(right, name="right")
 
         left_terms = torch.index_select(left, -1, self.left_indices)
         right_terms = torch.index_select(right, -1, self.right_indices)
@@ -74,11 +78,8 @@ class GradeProductExecutor(nn.Module):
 
     def forward_compact(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         """Return compact output for inputs already stored in this plan's compact layouts."""
-        if left.shape[-1] != self.left_layout.dim:
-            raise ValueError(f"left compact dimension must be {self.left_layout.dim}, got {left.shape[-1]}")
-        if right.shape[-1] != self.right_layout.dim:
-            raise ValueError(f"right compact dimension must be {self.right_layout.dim}, got {right.shape[-1]}")
-
+        self.left_contract.validate(left, name="left")
+        self.right_contract.validate(right, name="right")
         left_terms = torch.index_select(left, -1, self.left_compact_positions)
         right_terms = torch.index_select(right, -1, self.right_compact_positions)
         left_terms, right_terms = torch.broadcast_tensors(left_terms, right_terms)
@@ -94,11 +95,8 @@ class GradeProductExecutor(nn.Module):
         ``[..., right_items, right_layout.dim]``. The result is
         ``[..., left_items, right_items, output_layout.dim]``.
         """
-        if left.shape[-1] != self.left_layout.dim:
-            raise ValueError(f"left compact dimension must be {self.left_layout.dim}, got {left.shape[-1]}")
-        if right.shape[-1] != self.right_layout.dim:
-            raise ValueError(f"right compact dimension must be {self.right_layout.dim}, got {right.shape[-1]}")
-
+        self.left_contract.validate(left, name="left")
+        self.right_contract.validate(right, name="right")
         prefix = torch.broadcast_shapes(left.shape[:-2], right.shape[:-2])
         left = left.expand(*prefix, *left.shape[-2:])
         right = right.expand(*prefix, *right.shape[-2:])
@@ -129,13 +127,10 @@ class GradeProductExecutor(nn.Module):
         right_signs: torch.Tensor,
     ) -> torch.Tensor:
         """Pairwise compact product with a diagonal sign applied to right lanes."""
-        if left.shape[-1] != self.left_layout.dim:
-            raise ValueError(f"left compact dimension must be {self.left_layout.dim}, got {left.shape[-1]}")
-        if right.shape[-1] != self.right_layout.dim:
-            raise ValueError(f"right compact dimension must be {self.right_layout.dim}, got {right.shape[-1]}")
+        self.left_contract.validate(left, name="left")
+        self.right_contract.validate(right, name="right")
         if right_signs.shape != (self.right_layout.dim,):
             raise ValueError(f"right_signs shape must be {(self.right_layout.dim,)}, got {tuple(right_signs.shape)}")
-
         prefix = torch.broadcast_shapes(left.shape[:-2], right.shape[:-2])
         left = left.expand(*prefix, *left.shape[-2:])
         right = right.expand(*prefix, *right.shape[-2:])
@@ -196,6 +191,9 @@ class FullTableProductExecutor(nn.Module):
         self.left_layout = plan.left_layout
         self.right_layout = plan.right_layout
         self.output_layout = plan.output_layout
+        self.left_contract = plan.left_contract
+        self.right_contract = plan.right_contract
+        self.output_contract = plan.output_contract
         self._output_dim = plan.output_dim
         self._pair_count = plan.pair_count
         self.register_buffer("cayley_indices", plan.cayley_indices, persistent=False)
@@ -217,21 +215,15 @@ class FullTableProductExecutor(nn.Module):
 
     def forward_compact(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         """Return full-layout product lanes for full-layout compact values."""
-        if left.shape[-1] != self.dim:
-            raise ValueError(f"left full dimension must be {self.dim}, got {left.shape[-1]}")
-        if right.shape[-1] != self.dim:
-            raise ValueError(f"right full dimension must be {self.dim}, got {right.shape[-1]}")
-
+        self.left_contract.validate(left, name="left")
+        self.right_contract.validate(right, name="right")
         right_gathered = right[..., self.cayley_indices]
         return torch.matmul(left.unsqueeze(-2), right_gathered * self._signs_for(left, right)).squeeze(-2)
 
     def forward_pairwise_compact(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         """Pairwise full-layout product for item-axis operands."""
-        if left.shape[-1] != self.dim:
-            raise ValueError(f"left full dimension must be {self.dim}, got {left.shape[-1]}")
-        if right.shape[-1] != self.dim:
-            raise ValueError(f"right full dimension must be {self.dim}, got {right.shape[-1]}")
-
+        self.left_contract.validate(left, name="left")
+        self.right_contract.validate(right, name="right")
         prefix = torch.broadcast_shapes(left.shape[:-2], right.shape[:-2])
         left = left.expand(*prefix, *left.shape[-2:])
         right = right.expand(*prefix, *right.shape[-2:])

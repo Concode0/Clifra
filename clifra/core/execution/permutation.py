@@ -22,6 +22,8 @@ class PseudoscalarProductExecutor(nn.Module):
         self.spec = plan.spec
         self.input_layout = plan.input_layout
         self.output_layout = plan.output_layout
+        self.input_contract = plan.input_contract
+        self.output_contract = plan.output_contract
         self.input_grades = plan.input_grades
         self.output_grades = plan.output_grades
         self.input_dim = plan.input_layout.dim
@@ -31,8 +33,7 @@ class PseudoscalarProductExecutor(nn.Module):
 
     def forward(self, values: torch.Tensor) -> torch.Tensor:
         """Return right-pseudoscalar product values in ``output_layout`` lanes."""
-        if values.shape[-1] != self.input_dim:
-            raise ValueError(f"values last dimension must be {self.input_dim}, got {values.shape[-1]}")
+        self.input_contract.validate(values, name="values")
         gathered = torch.index_select(values, -1, self.input_positions)
         return gathered * self.signs
 

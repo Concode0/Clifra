@@ -1269,6 +1269,8 @@ class BivectorExpExecutor(nn.Module):
         self.grade4_layout = plan.grade4_layout
         self.operator_layout = plan.operator_layout
         self.output_layout = plan.output_layout
+        self.input_contract = plan.input_contract
+        self.output_contract = plan.output_contract
         self.executor_family = plan.executor_family
         self.eps = plan.eps
         self.eps_sq = plan.eps_sq
@@ -1387,8 +1389,7 @@ class BivectorExpExecutor(nn.Module):
 
     def forward(self, values: torch.Tensor) -> torch.Tensor:
         """Return ``exp(values)`` in ``output_layout`` lanes."""
-        if values.shape[-1] != self.input_layout.dim:
-            raise ValueError(f"bivector exp input dimension must be {self.input_layout.dim}, got {values.shape[-1]}")
+        self.input_contract.validate(values, name="values")
         if self.executor_family == "closed_simple":
             return self._closed_simple(values)
         if self.executor_family == "closed_biquadratic":

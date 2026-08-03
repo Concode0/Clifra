@@ -9,6 +9,7 @@ import torch
 
 from clifra.core.foundation.basis import operation_coefficient
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
+from clifra.core.runtime.tensors import TensorContract, _check_contract_spec
 
 
 class PseudoscalarProductPlan:
@@ -26,6 +27,8 @@ class PseudoscalarProductPlan:
         self.spec = spec
         self.input_layout = input_layout
         self.output_layout = output_layout
+        self.input_contract = TensorContract.compact(spec, input_layout)
+        self.output_contract = TensorContract.compact(spec, output_layout)
         self.input_positions = input_positions
         self.signs = signs
 
@@ -49,12 +52,12 @@ def build_pseudoscalar_product_plan(
     dtype: torch.dtype = torch.float32,
 ) -> PseudoscalarProductPlan:
     """Build a static right-pseudoscalar multiplication plan."""
-    if input_layout.spec != spec:
-        raise ValueError(f"input_layout signature {input_layout.spec} does not match algebra signature {spec}")
+    input_contract = TensorContract.compact(input_layout.spec, input_layout)
+    input_layout = _check_contract_spec(spec, input_contract, "input_layout").layout
     if output_layout is None:
         output_layout = spec.layout(tuple(spec.n - grade for grade in input_layout.grades))
-    if output_layout.spec != spec:
-        raise ValueError(f"output_layout signature {output_layout.spec} does not match algebra signature {spec}")
+    output_contract = TensorContract.compact(output_layout.spec, output_layout)
+    output_layout = _check_contract_spec(spec, output_contract, "output_layout").layout
 
     pseudoscalar_index = spec.dim - 1
     input_position_by_index = {index: position for position, index in enumerate(input_layout.basis_indices)}

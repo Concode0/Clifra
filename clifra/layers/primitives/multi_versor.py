@@ -16,6 +16,7 @@ from clifra.core.foundation.module import AlgebraLike, CliffordModule
 from clifra.core.runtime.tensors import resolve_contract
 
 from ._utils import (
+    _compact_contract_values,
     grade_indices,
     require_positive_int,
 )
@@ -85,6 +86,7 @@ class MultiVersorLayer(CliffordModule):
             output_layout=self.output_layout,
             parameter_layout=self.parameter_layout,
         )
+        self.parameter_contract = self.action.executor.parameter_contract
 
         self.grade_weights = nn.Parameter(torch.Tensor(self.num_versors, self.num_grade_elements))
         if self.grade == 2:
@@ -110,7 +112,7 @@ class MultiVersorLayer(CliffordModule):
         Returns:
             torch.Tensor: Transformed output [Batch, Channels, Dim].
         """
-        values = x if x.shape[-1] == self.input_layout.dim else self.input_layout.compact(x)
+        values = _compact_contract_values(x, self.input_contract, "MultiVersorLayer input")
         out = self.action(values, self.grade_weights, self.weights)
 
         if return_invariants:

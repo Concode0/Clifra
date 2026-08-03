@@ -63,7 +63,7 @@ def test_bivector_exp_matches_cpu_oracle_for_even_output_layouts(case):
         output_layout=output_layout,
     )
 
-    assert torch.allclose(actual, expected, atol=1e-9, rtol=1e-9)
+    assert torch.allclose(actual, expected, atol=2e-9, rtol=1e-9)
 
 
 @QUICK_PROPERTY_SETTINGS

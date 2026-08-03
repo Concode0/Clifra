@@ -26,10 +26,17 @@ from clifra.core.execution.handles import (
 from clifra.core.foundation.basis import expand_output_grades, normalize_grades
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
 from clifra.core.foundation.numerics import signed_clamp_min
-from clifra.core.planning.layouts import normalize_product_op
+from clifra.core.planning.layouts import ProductRequest, normalize_product_op
+from clifra.core.planning.unary import UnaryRequest, normalize_unary_op
 from clifra.core.runtime.energy import lane_grade_norms
 from clifra.core.runtime.forms import conjugate_scalar_form_signs as _conjugate_scalar_form_signs
-from clifra.core.runtime.tensors import LaneStorage, normalize_lane_storage
+from clifra.core.runtime.tensors import (
+    LaneStorage,
+    TensorContract,
+    infer_contract,
+    normalize_lane_storage,
+    resolve_contract,
+)
 
 
 class AlgebraHostMixin:
@@ -63,13 +70,7 @@ class AlgebraHostMixin:
         """Resolve explicit layout metadata. Tensor inspection is intentionally not supported."""
         if mv is not None:
             raise TypeError("Multivector wrappers are not part of the core layout contract")
-        if layout is not None:
-            if layout.spec != AlgebraSpec.from_algebra(self):
-                raise ValueError(f"layout signature {layout.spec} does not match algebra signature")
-            return layout
-        if grades is not None:
-            return self.layout(grades)
-        return self.default_layout()
+        return resolve_contract(self, layout=layout, grades=grades).layout
 
     def grade_indices(self, grades: Iterable[int], *, device=None) -> torch.Tensor:
         """Return canonical basis indices for ``grades``."""
@@ -88,32 +89,6 @@ class AlgebraHostMixin:
         """Return signs for the signed Clifford-conjugation scalar form."""
         return _conjugate_scalar_form_signs(self, layout=layout, grades=grades, device=device, dtype=dtype)
 
-    def product_executor(
-        self,
-        *,
-        left_grades,
-        right_grades,
-        op: str = "gp",
-        output_grades=None,
-        dtype: Optional[torch.dtype] = None,
-        device=None,
-        cache: bool = True,
-    ):
-        """Return a preplanned product executor."""
-        if dtype is None:
-            dtype = getattr(self, "dtype", torch.float32)
-        if device is None:
-            device = getattr(self, "device", None)
-        return self.planner.product_executor(
-            op=op,
-            left_grades=left_grades,
-            right_grades=right_grades,
-            output_grades=output_grades,
-            dtype=dtype,
-            device=device,
-            cache=cache,
-        )
-
     def plan_product(
         self,
         *,
@@ -128,29 +103,30 @@ class AlgebraHostMixin:
         device=None,
         cache: bool = True,
     ) -> ProductPlanHandle:
-        """Return an compact-lane product handle with no runtime request inference."""
+        """Return a compact-lane product handle with no runtime request inference."""
         if dtype is None:
             dtype = getattr(self, "dtype", torch.float32)
         if device is None:
             device = getattr(self, "device", None)
-        left_layout = self._declared_layout(left_grades, left_layout)
-        right_layout = self._declared_layout(right_grades, right_layout)
-        output_layout = self._product_output_layout(
+        left_contract = self._declared_contract(left_grades, left_layout, name="left_layout")
+        right_contract = self._declared_contract(right_grades, right_layout, name="right_layout")
+        output_contract = self._product_output_contract(
             op=op,
-            left_layout=left_layout,
-            right_layout=right_layout,
+            left_layout=left_contract.layout,
+            right_layout=right_contract.layout,
             output_grades=output_grades,
             output_layout=output_layout,
         )
-        executor = self.planner.product_executor_for_layouts(
+        request = ProductRequest(
+            spec=AlgebraSpec.from_algebra(self),
             op=normalize_product_op(op),
-            left_layout=left_layout,
-            right_layout=right_layout,
-            output_layout=output_layout,
+            left=left_contract,
+            right=right_contract,
+            output=output_contract,
             dtype=dtype,
-            device=device,
-            cache=cache,
+            device=torch.device(device),
         )
+        executor = self.planner.product_executor(request, cache=cache)
         return ProductPlanHandle(executor)
 
     def plan_unary(
@@ -165,21 +141,26 @@ class AlgebraHostMixin:
         device=None,
         cache: bool = True,
     ) -> UnaryPlanHandle:
-        """Return an compact-lane unary handle with no runtime request inference."""
+        """Return a compact-lane unary handle with no runtime request inference."""
         if dtype is None:
             dtype = getattr(self, "dtype", torch.float32)
         if device is None:
             device = getattr(self, "device", None)
-        input_layout = self._declared_layout(input_grades, input_layout)
-        output_layout = self._optional_layout(output_grades, output_layout)
-        executor = self.planner.unary_executor(
-            op=op,
-            input_grades=input_layout.grades,
-            output_grades=None if output_layout is None else output_layout.grades,
+        input_contract = self._declared_contract(input_grades, input_layout, name="input_layout")
+        output_contract = self._optional_contract(output_grades, output_layout, name="output_layout")
+        if output_contract is None:
+            if op == "grade_projection":
+                raise ValueError("output_grades or output_layout is required for grade_projection")
+            output_contract = input_contract
+        request = UnaryRequest(
+            spec=AlgebraSpec.from_algebra(self),
+            op=normalize_unary_op(op),
+            input=input_contract,
+            output=output_contract,
             dtype=dtype,
-            device=device,
-            cache=cache,
+            device=torch.device(device),
         )
+        executor = self.planner.unary_executor(request, cache=cache)
         return UnaryPlanHandle(executor)
 
     def plan_signature_norm_squared(
@@ -202,8 +183,8 @@ class AlgebraHostMixin:
             dtype = getattr(self, "dtype", torch.float32)
         if device is None:
             device = getattr(self, "device", None)
-        input_layout = self._declared_layout(input_grades, input_layout)
-        return self.planner.signature_norm_squared_executor_for_layout(
+        input_layout = self._declared_contract(input_grades, input_layout, name="input_layout").layout
+        return self.planner.signature_norm_squared_executor(
             input_layout=input_layout,
             dtype=dtype,
             device=device,
@@ -226,9 +207,10 @@ class AlgebraHostMixin:
             dtype = getattr(self, "dtype", torch.float32)
         if device is None:
             device = getattr(self, "device", None)
-        input_layout = self._declared_layout(input_grades, input_layout)
-        output_layout = self._optional_layout(output_grades, output_layout)
-        return self.planner.pseudoscalar_product_executor_for_layout(
+        input_layout = self._declared_contract(input_grades, input_layout, name="input_layout").layout
+        output_contract = self._optional_contract(output_grades, output_layout, name="output_layout")
+        output_layout = None if output_contract is None else output_contract.layout
+        return self.planner.pseudoscalar_product_executor(
             input_layout=input_layout,
             output_layout=output_layout,
             dtype=dtype,
@@ -259,13 +241,14 @@ class AlgebraHostMixin:
             dtype = getattr(self, "dtype", torch.float32)
         if device is None:
             device = getattr(self, "device", None)
-        input_layout = self._declared_layout(input_grades, input_layout)
-        output_layout = self._optional_layout(output_grades, output_layout)
+        input_layout = self._declared_contract(input_grades, input_layout, name="input_layout").layout
+        output_contract = self._optional_contract(output_grades, output_layout, name="output_layout")
+        output_layout = None if output_contract is None else output_contract.layout
         if output_layout is None:
             output_layout = self.layout(range(0, self.n + 1, 2))
         if input_layout.grades != (2,):
             raise ValueError(f"bivector exp requires grade-2 input layout, got {input_layout.grades}")
-        return self.planner.bivector_exp_executor_for_layouts(
+        return self.planner.bivector_exp_executor(
             input_layout=input_layout,
             output_layout=output_layout,
             dtype=dtype,
@@ -294,7 +277,7 @@ class AlgebraHostMixin:
         if device is None:
             device = getattr(self, "device", None)
         layout = self._full_sandwich_layout(layout)
-        executor = self.planner.full_sandwich_action_executor_for_layout(
+        executor = self.planner.full_sandwich_action_executor(
             layout=layout,
             dtype=dtype,
             device=device,
@@ -313,9 +296,14 @@ class AlgebraHostMixin:
         parameter_layout: Optional[GradeLayout] = None,
     ) -> VersorActionHandle:
         """Return a grade-1 or grade-2 versor action handle."""
-        input_layout = self._declared_layout(input_grades, input_layout)
-        output_layout = self._optional_layout(output_grades, output_layout) or input_layout
-        parameter_layout = parameter_layout or self.layout((int(grade),))
+        input_layout = self._declared_contract(input_grades, input_layout, name="input_layout").layout
+        output_contract = self._optional_contract(output_grades, output_layout, name="output_layout")
+        output_layout = input_layout if output_contract is None else output_contract.layout
+        parameter_layout = self._declared_contract(
+            None,
+            parameter_layout or self.layout((int(grade),)),
+            name="parameter_layout",
+        ).layout
         executor = VersorActionExecutor(
             self,
             grade=int(grade),
@@ -336,9 +324,14 @@ class AlgebraHostMixin:
         parameter_layout: Optional[GradeLayout] = None,
     ) -> MultiVersorActionHandle:
         """Return a weighted multi-versor action handle."""
-        input_layout = self._declared_layout(input_grades, input_layout)
-        output_layout = self._optional_layout(output_grades, output_layout) or input_layout
-        parameter_layout = parameter_layout or self.layout((int(grade),))
+        input_layout = self._declared_contract(input_grades, input_layout, name="input_layout").layout
+        output_contract = self._optional_contract(output_grades, output_layout, name="output_layout")
+        output_layout = input_layout if output_contract is None else output_contract.layout
+        parameter_layout = self._declared_contract(
+            None,
+            parameter_layout or self.layout((int(grade),)),
+            name="parameter_layout",
+        ).layout
         executor = MultiVersorActionExecutor(
             self,
             grade=int(grade),
@@ -358,9 +351,14 @@ class AlgebraHostMixin:
         parameter_layout: Optional[GradeLayout] = None,
     ) -> PairedBivectorActionHandle:
         """Return an independent left/right bivector action handle."""
-        input_layout = self._declared_layout(input_grades, input_layout)
-        output_layout = self._optional_layout(output_grades, output_layout)
-        parameter_layout = parameter_layout or self.layout((2,))
+        input_layout = self._declared_contract(input_grades, input_layout, name="input_layout").layout
+        output_contract = self._optional_contract(output_grades, output_layout, name="output_layout")
+        output_layout = None if output_contract is None else output_contract.layout
+        parameter_layout = self._declared_contract(
+            None,
+            parameter_layout or self.layout((2,)),
+            name="parameter_layout",
+        ).layout
         plan = self.planner.paired_bivector_action_plan(
             input_layout=input_layout,
             output_layout=output_layout,
@@ -435,9 +433,7 @@ class AlgebraHostMixin:
             right_storage=resolved_right_storage,
             output_storage=resolved_output_storage,
         )
-        executor = self.planner.product_executor_for_request(request)
-        request.left.validate(A, name="left")
-        request.right.validate(B, name="right")
+        executor = self.planner.product_executor(request)
         left_values = request.left.to_compact(A)
         right_values = request.right.to_compact(B)
         if pairwise:
@@ -470,22 +466,23 @@ class AlgebraHostMixin:
         This avoids re-inferring the same request on every forward while still
         validating tensor lane widths and reusing the planner executor cache.
         """
-        self._check_declared_layout(left_layout, left_grades, "left")
-        self._check_declared_layout(right_layout, right_grades, "right")
-        self._check_declared_layout(output_layout, output_grades, "output")
         if left.device != right.device:
             raise ValueError(f"product operands must be on the same device, got {left.device} and {right.device}")
 
-        executor = self.planner.product_executor_for_layouts(
+        request = ProductRequest(
+            spec=AlgebraSpec.from_algebra(self),
             op=normalize_product_op(op),
-            left_layout=left_layout,
-            right_layout=right_layout,
-            output_layout=output_layout,
+            left=self._declared_contract(left_grades, left_layout, name="left_layout"),
+            right=self._declared_contract(right_grades, right_layout, name="right_layout"),
+            output=self._declared_contract(output_grades, output_layout, name="output_layout"),
             dtype=torch.promote_types(left.dtype, right.dtype),
             device=left.device,
         )
-        left_values = self._compact_values_for_layout(left, left_layout, "left")
-        right_values = self._compact_values_for_layout(right, right_layout, "right")
+        executor = self.planner.product_executor(request)
+        request.left.validate(left, name="left")
+        request.right.validate(right, name="right")
+        left_values = left
+        right_values = right
         if pairwise:
             self._check_pairwise_prefix(left_values, right_values)
             return executor.forward_pairwise_compact(left_values, right_values)
@@ -552,7 +549,7 @@ class AlgebraHostMixin:
             input_storage=input_storage,
             output_storage=output_storage,
         )
-        executor = self.planner.unary_executor_for_request(request)
+        executor = self.planner.unary_executor(request)
         output = executor.forward_compact(request.input.to_compact(values))
         if request.output.uses_canonical_storage:
             output = request.output.layout.full(output)
@@ -574,7 +571,7 @@ class AlgebraHostMixin:
             input_layout = layout
         resolved = self._declared_layout(input_grades, input_layout)
         active_values = self._compact_values_for_layout(values, resolved, "signature_norm_squared values")
-        executor = self.planner.signature_norm_squared_executor_for_layout(
+        executor = self.planner.signature_norm_squared_executor(
             input_layout=resolved,
             dtype=active_values.dtype,
             device=active_values.device,
@@ -597,7 +594,7 @@ class AlgebraHostMixin:
         input_layout = self._declared_layout(input_grades, input_layout)
         output_layout = self._optional_layout(output_grades, output_layout)
         active_values = self._compact_values_for_layout(values, input_layout, "pseudoscalar_product values")
-        executor = self.planner.pseudoscalar_product_executor_for_layout(
+        executor = self.planner.pseudoscalar_product_executor(
             input_layout=input_layout,
             output_layout=output_layout,
             dtype=active_values.dtype,
@@ -636,7 +633,7 @@ class AlgebraHostMixin:
             output_layout=output_layout,
         )
         active_values = self._compact_values_for_layout(values, input_layout, "bivector_exp values")
-        executor = self.planner.bivector_exp_executor_for_layouts(
+        executor = self.planner.bivector_exp_executor(
             input_layout=input_layout,
             output_layout=output_layout,
             dtype=active_values.dtype,
@@ -855,7 +852,7 @@ class AlgebraHostMixin:
             right = self._compact_values_for_layout(right, layout, "sandwich_action_matrices right")
         left, right = self._promote_action_tensors(left, right)
         handle = self.plan_sandwich_action(layout=layout, dtype=left.dtype, device=left.device)
-        return handle.checked_action_matrices(left, right)
+        return handle.action_matrices(left, right)
 
     def sandwich_product(
         self,
@@ -875,7 +872,7 @@ class AlgebraHostMixin:
             right = self._compact_values_for_layout(right, layout, "sandwich_product right")
         left, values, right = self._promote_action_tensors(left, values, right)
         handle = self.plan_sandwich_action(layout=layout, dtype=left.dtype, device=left.device)
-        return handle.checked_batched(left, values, right)
+        return handle.batched(left, values, right)
 
     def per_channel_sandwich(
         self,
@@ -895,7 +892,7 @@ class AlgebraHostMixin:
             right = self._compact_values_for_layout(right, layout, "per_channel_sandwich right")
         left, values, right = self._promote_action_tensors(left, values, right)
         handle = self.plan_sandwich_action(layout=layout, dtype=left.dtype, device=left.device)
-        return handle.checked_per_channel(left, values, right)
+        return handle.per_channel(left, values, right)
 
     def multi_rotor_sandwich(
         self,
@@ -915,7 +912,7 @@ class AlgebraHostMixin:
             right = self._compact_values_for_layout(right, layout, "multi_rotor_sandwich right")
         left, values, right = self._promote_action_tensors(left, values, right)
         handle = self.plan_sandwich_action(layout=layout, dtype=left.dtype, device=left.device)
-        return handle.checked_multi(left, values, right)
+        return handle.multi(left, values, right)
 
     def versor_action(self, values: torch.Tensor, weights: torch.Tensor, **kwargs):
         """Execute a planned grade-1 or grade-2 versor action."""
@@ -930,7 +927,7 @@ class AlgebraHostMixin:
             parameter_layout=parameter_layout,
         )
         action_values = values if values.shape[-1] == input_layout.dim else input_layout.compact(values)
-        return handle.checked(action_values, weights)
+        return handle(action_values, weights)
 
     def multi_versor_action(self, values: torch.Tensor, weights: torch.Tensor, mix: torch.Tensor, **kwargs):
         """Execute a planned weighted grade-1 or grade-2 versor action."""
@@ -945,7 +942,7 @@ class AlgebraHostMixin:
             parameter_layout=parameter_layout,
         )
         action_values = values if values.shape[-1] == input_layout.dim else input_layout.compact(values)
-        return handle.checked(action_values, weights, mix)
+        return handle(action_values, weights, mix)
 
     def paired_bivector_action(
         self,
@@ -965,7 +962,7 @@ class AlgebraHostMixin:
             output_layout=kwargs.get("output_layout"),
         )
         action_values = values if values.shape[-1] == input_layout.dim else input_layout.compact(values)
-        return handle.checked(action_values, left_weights, right_weights, channel_to_pair)
+        return handle(action_values, left_weights, right_weights, channel_to_pair)
 
     def grade_norms(self, values: torch.Tensor, *, input_grades=None, layout: GradeLayout = None) -> torch.Tensor:
         """Return per-grade coefficient norms for declared-layout values."""
@@ -984,21 +981,34 @@ class AlgebraHostMixin:
 
         return format_multivector(self, values, **kwargs)
 
+    def _declared_contract(
+        self,
+        grades,
+        layout: GradeLayout | None,
+        *,
+        name: str = "layout",
+    ) -> TensorContract:
+        return resolve_contract(self, layout=layout, grades=grades, storage=LaneStorage.COMPACT, name=name)
+
+    def _optional_contract(
+        self,
+        grades,
+        layout: GradeLayout | None,
+        *,
+        name: str = "layout",
+    ) -> TensorContract | None:
+        if layout is None and grades is None:
+            return None
+        return resolve_contract(self, layout=layout, grades=grades, storage=LaneStorage.COMPACT, name=name)
+
     def _declared_layout(self, grades, layout: GradeLayout | None) -> GradeLayout:
-        if layout is not None:
-            return layout
-        if grades is not None:
-            return self.layout(grades)
-        return self.default_layout()
+        return self._declared_contract(grades, layout).layout
 
     def _optional_layout(self, grades, layout: GradeLayout | None) -> GradeLayout | None:
-        if layout is not None:
-            return layout
-        if grades is not None:
-            return self.layout(grades)
-        return None
+        contract = self._optional_contract(grades, layout)
+        return None if contract is None else contract.layout
 
-    def _product_output_layout(
+    def _product_output_contract(
         self,
         *,
         op: str,
@@ -1006,17 +1016,19 @@ class AlgebraHostMixin:
         right_layout: GradeLayout,
         output_grades,
         output_layout: GradeLayout | None,
-    ) -> GradeLayout:
-        resolved = self._optional_layout(output_grades, output_layout)
+    ) -> TensorContract:
+        resolved = self._optional_contract(output_grades, output_layout, name="output_layout")
         if resolved is not None:
             return resolved
         full_grades = tuple(range(self.n + 1))
         if left_layout.grades == full_grades and right_layout.grades == full_grades:
-            return self.planner.full_layout()
-        return self.layout(expand_output_grades(left_layout.grades, right_layout.grades, self.n, op=op))
+            layout = self.planner.full_layout()
+        else:
+            layout = self.layout(expand_output_grades(left_layout.grades, right_layout.grades, self.n, op=op))
+        return TensorContract.compact(layout.spec, layout)
 
     def _full_sandwich_layout(self, layout: Optional[GradeLayout]) -> GradeLayout:
-        resolved = self.planner.full_layout() if layout is None else layout
+        resolved = self._declared_contract(None, self.planner.full_layout() if layout is None else layout).layout
         full_grades = tuple(range(self.n + 1))
         if resolved.grades != full_grades:
             raise ValueError(f"full sandwich action requires full layout {full_grades}, got {resolved.grades}")
@@ -1071,8 +1083,6 @@ class AlgebraHostMixin:
 
         if resolved_output is None:
             raise ValueError("bivector exp could not resolve an output layout")
-        if resolved_output.spec != resolved_input.spec:
-            raise ValueError(f"output layout signature {resolved_output.spec} does not match input signature")
         return resolved_input, resolved_output
 
     @staticmethod
@@ -1082,16 +1092,8 @@ class AlgebraHostMixin:
 
     @staticmethod
     def _compact_values_for_layout(values: torch.Tensor, layout: GradeLayout, name: str) -> torch.Tensor:
-        if values.ndim < 1:
-            raise ValueError(f"{name} must include a coefficient lane dimension, got shape {tuple(values.shape)}")
-        if values.shape[-1] == layout.dim:
-            return values
-        if values.shape[-1] == layout.spec.dim:
-            return layout.compact(values)
-        raise ValueError(
-            f"{name} last dimension must be {layout.dim} for grades {layout.grades} or "
-            f"{layout.spec.dim} full lanes, got {values.shape[-1]}"
-        )
+        contract = infer_contract(layout.spec, values, layout=layout, side=name)
+        return contract.to_compact(values)
 
     @staticmethod
     def _check_elementwise_prefix(left: torch.Tensor, right: torch.Tensor) -> None:
