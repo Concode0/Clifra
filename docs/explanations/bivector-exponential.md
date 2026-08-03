@@ -1,269 +1,207 @@
 # Bivector Exponential Methods
 
-A simple Euclidean bivector describes one oriented plane. Its exponential has a
-familiar trigonometric form. A general bivector is harder: it can contain several
-independent planes, hyperbolic components, and null components, and its
-exponential can occupy several even grades.
-
-Clifra therefore plans more than one exponential method. Low-dimensional cases
-use finite closed forms, intermediate cases use a matrix representation, and
-eligible high-dimensional cases use a bounded spectral-local construction.
-
-## A bivector is not necessarily a single plane
-
-For a simple bivector $B$, $B^2$ is scalar. Its power series separates into
-even and odd powers and reduces to a combination of $1$ and $B$:
+The exponential of a bivector $B$ is the even multivector
 
 \[
 \exp(B) = \sum_{k=0}^{\infty}\frac{B^k}{k!}.
 \]
 
-The scalar sign of $B^2$ selects circular or hyperbolic functions, with a
-series treatment near zero.
+Its occupied grades and the cost of evaluating it depend on the dimension, signature, and algebraic structure of $B$. Clifra selects a static executor from the algebra specification, layouts, dtype, device, and exponential policy.
 
-A general bivector need not satisfy this closure. It may decompose into several
-orthogonal simple planes. Products between their components generate grade 4,
-grade 6, and higher even grades. The number of possible even blades is
-$2^{n-1}$, so a universal representation based on left multiplication grows
-exponentially with dimension.
+## Finite closures
 
-Signature adds further cases:
+### Simple closure
 
-- positive- and negative-square directions produce elliptic and hyperbolic
-  spectral behavior;
-- a mixed positive/negative signature can combine both;
-- null directions introduce nilpotent components and non-semisimple blocks;
-- repeated or nearly repeated spectral values make eigenvector derivatives
-  numerically delicate.
+When $B^2=s$ is scalar, every power of $B$ lies in the span of $1$ and $B$:
 
-There is no single short scalar formula that covers these cases efficiently at
-arbitrary dimension.
+\[
+\exp(B)=C(s)+S(s)B,
+\]
 
-## The planned executor families
+where
 
-| Family | Normal selection | Character |
+\[
+C(s)=
+\begin{cases}
+\cos(\sqrt{-s}) & s<0,\\
+1 & s=0,\\
+\cosh(\sqrt{s}) & s>0,
+\end{cases}
+\qquad
+S(s)=
+\begin{cases}
+\dfrac{\sin(\sqrt{-s})}{\sqrt{-s}} & s<0,\\
+1 & s=0,\\
+\dfrac{\sinh(\sqrt{s})}{\sqrt{s}} & s>0.
+\end{cases}
+\]
+
+This covers all bivectors for $n\leq3$ and is implemented by
+`closed_simple`.
+
+### Biquadratic closure
+
+For $4\leq n\leq5$, write
+
+\[
+B^2=s+K,
+\]
+
+where $s$ is scalar and $K$ has grade 4. In these dimensions $K^2$ is scalar,
+so the exponential closes over
+
+\[
+1,\quad B,\quad K,\quad BK.
+\]
+
+`closed_biquadratic` evaluates the four scalar coefficients from the two roots
+of the resulting quadratic relation. Real and complex root pairs use the same
+finite closure with different scalar coefficient formulas.
+
+## General representations
+
+### Left-multiplication matrix
+
+`left_matrix_exp` represents left multiplication by $B$ on the even
+subalgebra. If $L_B$ is that operator and $e_0$ represents the scalar identity,
+then
+
+\[
+\exp(B)=\exp(L_B)e_0.
+\]
+
+The executor applies `torch.matrix_exp` and maps the resulting column into the
+requested output layout. The operator has $2^{n-1}$ lanes for a full even
+algebra. `cpu_matrix_exp` uses the same construction on CPU for matrix cases
+that are unavailable on MPS.
+
+### Spectral-local representation
+
+For an eligible definite signature, clifra maps $B$ to a skew generator $G$ on
+the nondegenerate vector space. The symmetric problem based on $-G^2$ identifies
+invariant plane pairs. The executor then:
+
+1. selects up to four plane pairs;
+2. reconstructs a simple bivector on each selected plane;
+3. evaluates each simple exponential;
+4. multiplies the commuting factors in a bounded local even algebra;
+5. lifts the requested grades into the ambient output layout.
+
+Supported degenerate signatures add a local null ideal to this construction.
+The null-ideal dimension is capped at four, and its mixed and nilpotent terms
+are evaluated inside the local algebra.
+
+The cost of `spectral_local` depends on the retained local dimension rather
+than the full ambient even algebra. It is exact when the retained planes and
+null block contain the complete active structure. If additional planes are
+present, it evaluates the exponential of the retained local component.
+
+## Executor selection
+
+| Family | Normal selection | Result |
 | --- | --- | --- |
-| `closed_simple` | $n \le 3$ | Exact closure over scalar and bivector terms. |
-| `closed_biquadratic` | $4 \le n \le 5$ | Exact finite closure using scalar and grade-4 structure. |
-| `left_matrix_exp` | General fallback | Exact for the represented operator up to floating-point error; potentially expensive. |
-| `cpu_matrix_exp` | MPS fallback for unsupported matrix cases | Same construction executed on CPU. |
-| `spectral_local` | Eligible higher dimensions | Local dominant-plane construction, exact only when the retained local spectrum is complete. |
+| `closed_simple` | $n\leq3$ | Exact scalar-bivector closure. |
+| `closed_biquadratic` | $4\leq n\leq5$ | Exact scalar, bivector, and grade-4 closure. |
+| `spectral_local` | Eligible higher-dimensional cases | Exact for a complete retained spectrum; otherwise truncated. |
+| `left_matrix_exp` | Matrix fallback | Exponential of the represented full even operator. |
+| `cpu_matrix_exp` | MPS matrix fallback | The matrix construction executed on CPU. |
 
-The low-dimensional formulas are possible because the relevant powers close in
-a small subspace. For $n \le 3$, $B^2$ is scalar. For $4 \le n \le 5$, the
-calculation closes over terms generated by $1$, $B$, the grade-4 part of
-$B^2$, and their product.
+The spectral-local eligibility rules are:
 
-The matrix route constructs left multiplication by $B$ on the even
-subalgebra, applies `torch.matrix_exp`, and evaluates the resulting operator at
-the scalar identity. It is general, but its operator width follows the even
-algebra. Increasing $n$ by one approximately doubles that width and can make
-both the forward and backward passes impractical.
+- the signature is definite on its nondegenerate part;
+- the dtype is neither `float16` nor `bfloat16`;
+- the nondegenerate space contains at least one plane;
+- the null dimension does not exceed four;
+- degenerate and truncated-degenerate handling are enabled when required;
+- on devices other than MPS, the dimension reaches the policy transition,
+  which defaults to 10.
+
+Dimensions at or below five always use a finite closure. An ineligible
+higher-dimensional case uses a matrix executor. A mixed positive/negative
+signature is currently a matrix case.
+
+The transition dimension and spectral limits are policy inputs. They determine
+the executor family during planning; the executor does not change families from
+runtime tensor values.
 
 ## Coefficient evaluation near repeated roots
 
-Some coefficients in the closed and spectral-local formulas contain removable
-limits or divided differences. Near a repeated root, direct evaluation can
-subtract nearly equal values and then divide by a small invariant. In these
-regions, clifra evaluates a short Taylor polynomial instead of the direct
-formula.
+The closed and spectral-local formulas contain removable limits and divided
+differences. Direct evaluation near a repeated root can subtract nearly equal
+values before dividing by a small invariant. Clifra uses a fixed Taylor
+polynomial in that region.
 
 Let $u=\operatorname{finfo}(\text{dtype}).\mathrm{eps}$. If the first omitted
 Taylor term is approximately $x^m/D$ and direct roundoff is amplified as
-$u/x^k$, clifra switches representations near
+$u/x^k$, the representations have comparable error near
 
 \[
-x_{\mathrm{cut}} = (uD)^{1/(m+k)}.
+x_{\mathrm{cut}}=(uD)^{1/(m+k)}.
 \]
 
-This cutoff balances Taylor truncation against the roundoff expected from the
-direct expression. Float32 uses a wider Taylor region than float64 because its
-epsilon is larger. The polynomial order is fixed, and executor-local cutoffs
-are computed once from the planned dtype. Outside the cutoff, the direct
-formula is used.
+The executor derives each cutoff from its dtype and coefficient formula.
+Float32 therefore uses a wider Taylor interval than float64. The polynomial
+degree and cutoff are fixed for a planned executor, so this treatment does not
+introduce data-dependent iteration.
 
-The cutoff applies only to evaluation of these scalar coefficients. It does not
-change executor selection or spectral truncation policy. Local coefficient
-error generally remains near dtype rounding error for well-conditioned inputs,
-while products, eigenspace conditioning, backend kernels, and spectral
-truncation can produce larger error in the complete exponential.
-
-## `spectral_local` computation
-
-For an eligible signature, clifra maps the bivector coefficients to a skew
-generator on the nondegenerate vector space. The spectral-local executor then:
-
-1. obtains dominant invariant plane pairs from the symmetric problem based on
-   $-G^2$;
-2. reconstructs a simple bivector for each retained plane;
-3. evaluates the closed exponential of each simple plane;
-4. multiplies the commuting local factors;
-5. lifts the resulting local even multivector into the requested output layout.
-
-The computation is local because its working algebra is formed from the
-retained planes and any supported null ideal, not from every blade of the
-ambient algebra. Clifra retains at most four planes. Degenerate handling also
-has a bounded null-ideal dimension of four.
-
-This removes the exponential dependence on ambient dimension when the useful
-generator is spectrally local. Arbitrary high-rank bivectors still require more
-than a constant-cost local representation for an exact exponential.
-
-## Eligibility and fallback constraints
-
-Spectral-local selection is constrained deliberately:
-
-- dimensions at or below five use the closed formulas;
-- mixed positive and negative nondegenerate signatures do not use
-  `spectral_local`;
-- `float16` and `bfloat16` are not eligible;
-- the nondegenerate space must contain at least one plane;
-- the transition dimension is policy-controlled and defaults to 10;
-- degenerate signatures require enabled degenerate handling;
-- more than four null directions exceed the supported local ideal;
-- disabling truncated-degenerate handling also rejects cases whose kernel or
-  plane rank cannot be represented completely.
-
-An ineligible case uses matrix exponentiation. On MPS, a mixed-signature matrix
-case is routed through the CPU fallback. The underlying Clifford algebras remain
-supported; only the available numerical methods carry these constraints.
+These cutoffs govern scalar coefficient evaluation only. Product roundoff,
+eigenspace conditioning, backend kernels, and spectral truncation remain
+separate sources of error in the complete result.
 
 ## Truncation and diagnostics
 
-If the bivector has at most four active orthogonal planes, retaining four planes
-can represent its complete plane spectrum, subject to numerical tolerance. If
-energy is spread across more planes, the executor omits a tail and is
-approximate.
+Let $|\theta_1|\geq\cdots\geq|\theta_M|$ be the plane-angle magnitudes and let
+$k$ be the retained plane count. Clifra reports two complementary summaries:
 
-### Energy concentration in learned generators
+\[
+\operatorname{GVC}
+=\frac{\sum_{i=1}^{k}\theta_i^2}
+       {\sum_{i=1}^{M}\theta_i^2},
+\qquad
+T=\sum_{i=k+1}^{M}|\theta_i|.
+\]
 
-Spectral concentration can occur when the task has low intrinsic geometric
-dimension. Correlated gradients, small residual updates, explicit norm
-penalties, or a low-rank parameterization can leave most of a generator in a
-small number of planes. Ambient dimension alone provides no such concentration.
+Geometric variance captured (GVC) measures relative spectral concentration.
+The tail-angle sum $T$ measures the absolute size of the omitted plane angles.
+Neither quantity alone is an error bound for an arbitrary downstream
+calculation.
 
-A dense grade-2 parameter has $n(n-1)/2$ independent coordinates. Standard
-initialization, Adam, and SGD leave its skew rank unconstrained. Isotropic random
-initialization tends to distribute energy across the available planes, and
-gradient noise or composition can populate weak planes. Concentration must be
-measured on trained parameters.
+`spectral_exp_angle_diagnostics` computes these values from a supplied angle
+spectrum. `spectral_exp_uniform_tail_stress` reports the static case in which a
+fixed norm is distributed uniformly across all available planes. The former is
+suited to measured generators; the latter is a capacity stress case.
 
-Two cases are relevant:
-
-- **Concentrated spectrum:** most squared angle energy lies in the retained
-  planes.
-- **Small absolute spectrum:** omitted angles are negligible even if their
-  fraction of total energy is large.
-
-Geometric variance captured measures the first case. The tail-angle sum measures
-the second. A low GVC can be harmless when every angle is small. A high GVC can
-still leave a material tail when the generator is large.
-
-### Static stress and measured spectra
-
-`spectral_exp_uniform_tail_stress` evaluates a deliberately demanding
-pre-training case in which a fixed bivector norm is distributed uniformly across
-$M = \lfloor n/2 \rfloor$ planes. With four retained planes, its GVC is $4/M$ and
-the tail bound grows with the number of omitted planes. It serves as a stress
-case, not as a prediction of training behavior.
-
-`spectral_exp_angle_diagnostics` evaluates an angle spectrum obtained from a
-specific generator or checkpoint. Its input expects one angle magnitude per
-orthogonal plane; raw bivector coefficients must first be converted into that
-spectrum.
-For a definite nondegenerate signature, the angles can be obtained from the
-paired spectrum of the skew generator representing the bivector. In a supported
-degenerate signature, these angles describe the nondegenerate block; mixed and
-nilpotent ideal components require separate validation. Mixed positive/negative
-signatures are not eligible for the spectral-local route.
-
-```python
-import torch
-
-from clifra.core import (
-    AlgebraSpec,
-    spectral_exp_angle_diagnostics,
-    spectral_exp_uniform_tail_stress,
-)
-
-stress = spectral_exp_uniform_tail_stress(
-    [AlgebraSpec(63, 0, 0)],
-    max_planes=4,
-    bivector_norm=1.0,
-)[0]
-
-# One magnitude per plane, computed during checkpoint analysis.
-angles = torch.tensor([[0.72, 0.21, 0.05, 0.01, 0.002, 0.001]])
-measured = spectral_exp_angle_diagnostics(angles, max_planes=4)
-
-print(stress.tail_angle_sum_bound)
-print(measured.geometric_variance_captured)
-print(measured.tail_angle_sum_bound)
-```
-
-Retain layer, channel, and checkpoint axes until aggregation. Report the maximum
-or upper quantiles of `tail_angle_sum_bound` and the minimum or lower quantiles
-of GVC. A global mean can hide a small set of generators with persistent tails.
-
-Useful checkpoints include initialization, the end of warm-up, learning-rate or
-curriculum changes, and the final model. Repeated measurements determine whether
-concentration is stable. The diagnostic detaches its input and is not a
-differentiable regularizer. A training-time tail penalty requires a separate
-differentiable spectrum calculation.
-
-`spectral_exp_angle_diagnostics` reports:
-
-- the sorted absolute plane angles;
-- the number of selected and total planes;
-- whether selection truncates the spectrum;
-- geometric variance captured, the retained squared-angle energy divided by
-  total squared-angle energy;
-- `tail_angle_sum_bound`, the sum of omitted absolute angles.
-
-The tail-angle sum reports cumulative omitted angle. Treat it as a bound on the
-norm of an omitted multivector factor only after specifying the representation,
-norm, and assumptions behind that inequality.
-
-GVC measures spectral concentration and supplies no approximation-error bound. A
-small amount of squared energy distributed across many planes can still produce
-a material cumulative angle. Interpret the tail bound with the coefficient
-scale, step count, and downstream sensitivity.
-
-The diagnostic is intended for checkpoint analysis or inference logging. Keep
-it outside a compiled training step; scalar extraction and reporting can
-synchronize execution.
+Diagnostics should retain relevant batch, layer, or channel axes until the
+desired aggregation is chosen. The diagnostic API detaches its input and is
+intended for analysis rather than as a differentiable training objective.
 
 ## Backward behavior
 
-The matrix and closed routes differentiate their implemented tensor programs.
-The spectral route uses a filtered symmetric eigendecomposition. Near repeated
-eigenvalues, its backward suppresses unstable inverse eigenvalue gaps instead of
-allowing them to diverge. This gives a finite derivative convention through
-locally non-unique eigenspaces.
+The closed and matrix executors differentiate their tensor programs directly.
+The spectral-local executor uses a filtered symmetric eigendecomposition. Its
+backward replaces unstable inverse gaps near repeated eigenvalues with a finite
+convention for the locally non-unique eigenspace.
 
-When the plane spectrum is truncated, backward differentiates the retained
-spectral-local computation; omitted parts of the full exponential contribute no
-derivative. A small forward discrepancy alone says little about whether
-long-horizon optimization follows the exact exponential's path.
+When planes are truncated, backward differentiates the retained computation.
+It does not add derivatives for omitted spectral components. Forward and
+gradient comparisons with a matrix-exponential reference should therefore use
+the same retained-spectrum assumptions.
 
-## Validation criteria for `spectral_local`
+## Operating principles
 
-Use it when all of the following have been established for the intended
-workload:
+Clifra applies the following rules to bivector exponentiation:
 
-1. The signature, dtype, and null dimension are eligible.
-2. Measured angle spectra fit within the retained plane cap or have an acceptable
-   tail-angle bound.
-3. Generator norms and integration or layer step counts keep accumulated drift
-   within the application's tolerance.
-4. Representative forward values and gradients have been compared with a
-   higher-precision matrix-exponential reference at tractable dimensions.
-5. Required invariants hold for the complete model as well as for the individual
-   exponential.
-
-The route applies when ambient dimension is high and measured generators remain
-low-rank or dominated by a few planes. Persistent tails require a different
-design: a constrained low-rank generator, a sequence of local exponentials, a
-smaller integration step, or an exact fallback where its cost is tractable. A
-sequence of exponentials changes the parameterization and generally differs
-from the exponential of their summed generators.
+1. **Plan statically.** Executor selection belongs to planning and is determined
+   from structural inputs and policy, not inferred mathematical intent.
+2. **Use finite closure when available.** Low-dimensional exact formulas avoid
+   constructing a larger operator.
+3. **Bound local work explicitly.** Spectral-local plane and null dimensions are
+   planned limits, and truncation is part of that executor's result semantics.
+4. **Separate numerical conditioning from method selection.** Dtype-derived
+   coefficient cutoffs stabilize a selected formula without changing executor
+   families.
+5. **Differentiate the executed map.** Each backward path corresponds to the
+   exact or truncated forward computation that produced the result.
+6. **Measure approximation at the workload boundary.** When spectral truncation
+   is enabled, inspect both retained spectral concentration and absolute tail
+   magnitude on representative inputs.
