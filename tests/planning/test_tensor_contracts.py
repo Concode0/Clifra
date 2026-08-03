@@ -6,7 +6,15 @@ import torch
 
 from clifra.core.foundation.layout import AlgebraSpec
 from clifra.core.planning.layouts import build_product_request
-from clifra.core.runtime.tensors import LaneStorage, TensorContract, compact_pair_values, infer_contract
+from clifra.core.planning.unary import UnaryRequest
+from clifra.core.runtime.tensors import (
+    LaneStorage,
+    TensorContract,
+    check_layout_spec,
+    compact_pair_values,
+    infer_contract,
+    resolve_contract,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -23,6 +31,43 @@ def test_tensor_contract_records_declared_layout_and_storage():
     assert canonical.layout is vector_layout
     assert canonical.storage is LaneStorage.CANONICAL
     assert canonical.lane_dim == spec.dim
+
+
+def test_public_layout_spec_validation_accepts_equal_specs_and_rejects_foreign_signatures():
+    spec = AlgebraSpec(3, 0, 0)
+    peer_spec = AlgebraSpec(3, 0, 0)
+    foreign_spec = AlgebraSpec(0, 3, 0)
+    layout = peer_spec.layout((1,))
+
+    assert check_layout_spec(spec, layout, "input_layout") is None
+    with pytest.raises(ValueError, match="input_layout signature .* does not match algebra signature"):
+        check_layout_spec(foreign_spec, layout, "input_layout")
+
+
+def test_resolve_contract_reports_role_and_grade_disagreement():
+    spec = AlgebraSpec(3, 0, 0)
+    foreign_spec = AlgebraSpec(0, 3, 0)
+
+    with pytest.raises(ValueError, match="input_layout signature .* does not match algebra signature"):
+        resolve_contract(spec, layout=foreign_spec.layout((1,)), name="input_layout")
+    with pytest.raises(ValueError, match="input_layout and input_grades disagree"):
+        resolve_contract(spec, layout=spec.layout((1,)), grades=(2,), name="input_layout")
+
+
+def test_unary_request_rejects_inconsistent_contracts_at_construction():
+    spec = AlgebraSpec(3, 0, 0)
+    foreign_spec = AlgebraSpec(0, 3, 0)
+    foreign = TensorContract.compact(foreign_spec, foreign_spec.layout((1,)))
+
+    with pytest.raises(ValueError, match="input_layout signature .* does not match algebra signature"):
+        UnaryRequest(
+            spec=spec,
+            op="reverse",
+            input=foreign,
+            output=foreign,
+            dtype=torch.float32,
+            device=torch.device("cpu"),
+        )
 
 
 def test_tensor_contract_converts_between_compact_and_canonical():

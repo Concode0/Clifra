@@ -27,6 +27,7 @@ from clifra.core.foundation.basis import expand_output_grades, normalize_grades
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
 from clifra.core.foundation.numerics import signed_clamp_min
 from clifra.core.planning.layouts import ProductRequest, normalize_product_op
+from clifra.core.planning.unary import UnaryRequest, normalize_unary_op
 from clifra.core.runtime.energy import lane_grade_norms
 from clifra.core.runtime.forms import conjugate_scalar_form_signs as _conjugate_scalar_form_signs
 from clifra.core.runtime.tensors import (
@@ -140,21 +141,26 @@ class AlgebraHostMixin:
         device=None,
         cache: bool = True,
     ) -> UnaryPlanHandle:
-        """Return an compact-lane unary handle with no runtime request inference."""
+        """Return a compact-lane unary handle with no runtime request inference."""
         if dtype is None:
             dtype = getattr(self, "dtype", torch.float32)
         if device is None:
             device = getattr(self, "device", None)
-        input_layout = self._declared_layout(input_grades, input_layout)
-        output_layout = self._optional_layout(output_grades, output_layout)
-        executor = self.planner.unary_executor(
-            op=op,
-            input_grades=input_layout.grades,
-            output_grades=None if output_layout is None else output_layout.grades,
+        input_contract = self._declared_contract(input_grades, input_layout, name="input_layout")
+        output_contract = self._optional_contract(output_grades, output_layout, name="output_layout")
+        if output_contract is None:
+            if op == "grade_projection":
+                raise ValueError("output_grades or output_layout is required for grade_projection")
+            output_contract = input_contract
+        request = UnaryRequest(
+            spec=AlgebraSpec.from_algebra(self),
+            op=normalize_unary_op(op),
+            input=input_contract,
+            output=output_contract,
             dtype=dtype,
-            device=device,
-            cache=cache,
+            device=torch.device(device),
         )
+        executor = self.planner.unary_executor(request, cache=cache)
         return UnaryPlanHandle(executor)
 
     def plan_signature_norm_squared(
@@ -526,7 +532,7 @@ class AlgebraHostMixin:
             input_storage=input_storage,
             output_storage=output_storage,
         )
-        executor = self.planner.unary_executor_for_request(request)
+        executor = self.planner.unary_executor(request)
         output = executor.forward_compact(request.input.to_compact(values))
         if request.output.uses_canonical_storage:
             output = request.output.layout.full(output)

@@ -107,12 +107,12 @@ def test_static_grade_product_pairwise_compact_compiles_fullgraph_with_aot_eager
 @pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")
 def test_planned_unary_compiles_fullgraph_with_aot_eager():
     algebra = make_algebra(6, 0, 0, device=DEVICE, dtype=torch.float32)
-    executor = algebra.planner.unary_executor(
+    executor = algebra.plan_unary(
         op="reverse",
         input_grades=(2,),
         dtype=torch.float32,
         device=DEVICE,
-    )
+    ).executor
     values = _grade_only_input(algebra, 2, (2,), seed=173).to(dtype=torch.float32)
 
     compiled = torch.compile(executor, backend="aot_eager", fullgraph=True)

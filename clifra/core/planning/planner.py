@@ -44,7 +44,6 @@ from clifra.core.planning.unary import (
     UnaryRequest,
     build_unary_plan_from_request,
     build_unary_request,
-    normalize_unary_op,
 )
 from clifra.core.runtime.tensors import LaneStorage, TensorContract, _check_contract_spec
 
@@ -269,29 +268,21 @@ class GradePlanner:
 
     def unary_executor(
         self,
+        request: UnaryRequest,
         *,
-        op: str,
-        input_grades,
-        output_grades=None,
-        dtype,
-        device,
         cache: bool = True,
     ) -> GradeUnaryExecutor:
-        """Return a cached static executor for a unary operation."""
-        op = normalize_unary_op(op)
-        if op == "grade_projection" and output_grades is None:
-            raise ValueError("output_grades is required for grade_projection")
-        input_layout = self.layout(input_grades)
-        output_layout = input_layout if output_grades is None else self.layout(output_grades)
-        request = UnaryRequest(
-            spec=self.spec,
-            op=op,
-            input=TensorContract.compact(self.spec, input_layout),
-            output=TensorContract.compact(self.spec, output_layout),
-            dtype=dtype,
-            device=torch.device(device),
-        )
-        return self.unary_executor_for_request(request, cache=cache)
+        """Return the cached executor for one normalized unary request."""
+        request.validate(self.spec)
+        validate_unary_request(self.algebra, request)
+        key = request.cache_key
+        executor = self._unary_executors.get(key) if cache else None
+        if executor is None:
+            plan = build_unary_plan_from_request(request)
+            executor = GradeUnaryExecutor(plan)
+            if cache:
+                self._unary_executors[key] = executor
+        return executor
 
     def signature_norm_squared_executor(
         self,
@@ -581,17 +572,6 @@ class GradePlanner:
             parameter_layout=parameter_layout,
         )
 
-    def unary_executor_for_request(self, request: UnaryRequest, *, cache: bool = True) -> GradeUnaryExecutor:
-        """Return an executor for an already normalized unary request."""
-        key = request.cache_key
-        executor = self._unary_executors.get(key) if cache else None
-        if executor is None:
-            plan = build_unary_plan_from_request(request)
-            executor = GradeUnaryExecutor(plan)
-            if cache:
-                self._unary_executors[key] = executor
-        return executor
-
     def _product_cache_key(self, executor: FullTableProductExecutor | GradeProductExecutor) -> tuple[object, ...]:
         self._compact_contract(executor.left_layout, "left_layout")
         self._compact_contract(executor.right_layout, "right_layout")
@@ -635,6 +615,8 @@ class GradePlanner:
         return cost.executor_family
 
     def _unary_cache_key(self, executor: GradeUnaryExecutor) -> tuple[object, ...]:
+        self._compact_contract(executor.input_layout, "input_layout")
+        self._compact_contract(executor.output_layout, "output_layout")
         return (
             self.spec,
             str(executor.signs.device),
