@@ -60,6 +60,34 @@ the scalar identity. It is general, but its operator width follows the even
 algebra. Increasing $n$ by one approximately doubles that width and can make
 both the forward and backward passes impractical.
 
+## Coefficient evaluation near repeated roots
+
+Some coefficients in the closed and spectral-local formulas contain removable
+limits or divided differences. Near a repeated root, direct evaluation can
+subtract nearly equal values and then divide by a small invariant. In these
+regions, clifra evaluates a short Taylor polynomial instead of the direct
+formula.
+
+Let $u=\operatorname{finfo}(\text{dtype}).\mathrm{eps}$. If the first omitted
+Taylor term is approximately $x^m/D$ and direct roundoff is amplified as
+$u/x^k$, clifra switches representations near
+
+\[
+x_{\mathrm{cut}} = (uD)^{1/(m+k)}.
+\]
+
+This cutoff balances Taylor truncation against the roundoff expected from the
+direct expression. Float32 uses a wider Taylor region than float64 because its
+epsilon is larger. The polynomial order is fixed, and executor-local cutoffs
+are computed once from the planned dtype. Outside the cutoff, the direct
+formula is used.
+
+The cutoff applies only to evaluation of these scalar coefficients. It does not
+change executor selection or spectral truncation policy. Local coefficient
+error generally remains near dtype rounding error for well-conditioned inputs,
+while products, eigenspace conditioning, backend kernels, and spectral
+truncation can produce larger error in the complete exponential.
+
 ## `spectral_local` computation
 
 For an eligible signature, clifra maps the bivector coefficients to a skew

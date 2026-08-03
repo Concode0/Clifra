@@ -950,19 +950,26 @@ def _spectral_local_degenerate_plane_factor_impl(
 def _spectral_local_nilpotent_coefficients_impl(theta: Tensor, sinc: Tensor, cos_theta: Tensor) -> tuple[Tensor, Tensor, Tensor]:
     theta_sq = theta * theta
     theta_fourth = theta_sq * theta_sq
+    theta_sixth = theta_fourth * theta_sq
     diff = sinc - cos_theta
-    active = theta_sq > torch.finfo(theta.dtype).eps
-    safe_theta_sq = torch.where(active, theta_sq, torch.ones_like(theta_sq))
+    eps = torch.finfo(theta.dtype).eps
+    theta_abs = theta.abs()
+    # Balance the theta**8 truncation terms against roundoff amplified by
+    # theta**-2 (f2, g1) or theta**-4 (g2).  The cap keeps the polynomial
+    # inside a conservative domain for lower-precision dtypes.
+    quotient_active = theta_abs > min(0.5, (eps * 7_983_360.0) ** 0.1)
+    g2_active = theta_abs > min(0.5, (eps * 415_134_720.0) ** (1.0 / 12.0))
+    safe_theta_sq = torch.where(quotient_active, theta_sq, torch.ones_like(theta_sq))
     f2_raw = diff / (8.0 * safe_theta_sq)
     g1_raw = diff / (2.0 * safe_theta_sq)
     g2_raw = (3.0 * diff - theta_sq * sinc) / (8.0 * safe_theta_sq * safe_theta_sq)
-    f2_series = 1.0 / 24.0 - theta_sq / 240.0 + theta_fourth / 6720.0
-    g1_series = 1.0 / 6.0 - theta_sq / 60.0 + theta_fourth / 1680.0
-    g2_series = 1.0 / 120.0 - theta_sq / 1680.0 + theta_fourth / 60480.0
+    f2_series = 1.0 / 24.0 - theta_sq / 240.0 + theta_fourth / 6720.0 - theta_sixth / 362880.0
+    g1_series = 1.0 / 6.0 - theta_sq / 60.0 + theta_fourth / 1680.0 - theta_sixth / 90720.0
+    g2_series = 1.0 / 120.0 - theta_sq / 1680.0 + theta_fourth / 60480.0 - theta_sixth / 3991680.0
     return (
-        torch.where(active, f2_raw, f2_series),
-        torch.where(active, g1_raw, g1_series),
-        torch.where(active, g2_raw, g2_series),
+        torch.where(quotient_active, f2_raw, f2_series),
+        torch.where(quotient_active, g1_raw, g1_series),
+        torch.where(g2_active, g2_raw, g2_series),
     )
 
 
@@ -970,7 +977,9 @@ def _spectral_local_sinc_impl(theta: Tensor) -> Tensor:
     theta_sq = theta * theta
     theta_fourth = theta_sq * theta_sq
     series = 1.0 - theta_sq / 6.0 + theta_fourth / 120.0 - theta_fourth * theta_sq / 5040.0
-    active = theta.abs() > torch.finfo(theta.dtype).eps
+    # Switch where the theta**8 / 9! truncation error reaches dtype epsilon.
+    series_limit = min(0.5, (torch.finfo(theta.dtype).eps * 362880.0) ** 0.125)
+    active = theta.abs() > series_limit
     safe_theta = torch.where(active, theta, torch.ones_like(theta))
     return torch.where(active, torch.sin(theta) / safe_theta, series)
 
@@ -1274,6 +1283,15 @@ class BivectorExpExecutor(nn.Module):
         self.executor_family = plan.executor_family
         self.eps = plan.eps
         self.eps_sq = plan.eps_sq
+        # Dtype-specific series cutoffs derived from the first omitted term.
+        self.real_exp_series_limit = min(0.5, (plan.eps * 40320.0) ** 0.25)
+        self.sinhc_derivative_series_limit = min(0.5, (plan.eps * 7_983_360.0) ** 0.2)
+        self.cosh_divided_difference_limit = min(0.5, (plan.eps * 3_628_800.0) ** 0.2)
+        self.sinhc_divided_difference_limit = min(0.5, (plan.eps * 39_916_800.0) ** 0.2)
+        # Only an indefinite or degenerate grade-4 form admits a finite
+        # near-null carrier.  In a definite form its norm contracts with the
+        # invariant and cancels the coefficient's divided-difference error.
+        self.stabilize_split_divided_differences = plan.spec.r > 0 or (plan.spec.p > 0 and plan.spec.q > 0)
         self.spectral_max_planes = int(plan.spectral_max_planes)
         self.spectral_lift_output_dim = int(plan.spectral_lift_output_dim)
         self.spectral_tol_abs = float(plan.spectral_tol_abs)
@@ -1495,6 +1513,36 @@ class BivectorExpExecutor(nn.Module):
         split_bivector_coeff = 0.5 * (s_plus + s_minus)
         split_bivector_grade4_coeff = (s_plus - s_minus) / (2.0 * split_mu)
 
+        if self.stabilize_split_divided_differences:
+            cosh_coalescing = split_mask & (split_mu <= self.cosh_divided_difference_limit)
+            sinhc_coalescing = split_mask & (split_mu <= self.sinhc_divided_difference_limit)
+            center_mask = base_mask | cosh_coalescing | sinhc_coalescing
+        else:
+            center_mask = base_mask
+        center_scalar = torch.where(center_mask, scalar_square, zeros)
+        center_scalar_coeff, center_bivector_coeff = self._real_cosh_sinhc_sqrt(center_scalar)
+        center_bivector_grade4_coeff = self._real_sinhc_sqrt_derivative(
+            center_scalar,
+            center_scalar_coeff,
+            center_bivector_coeff,
+        )
+        if self.stabilize_split_divided_differences:
+            cosh_correction, sinhc_correction = self._real_coalescing_corrections(
+                center_scalar,
+                center_bivector_coeff,
+                center_bivector_grade4_coeff,
+            )
+            split_grade4_coeff = torch.where(
+                cosh_coalescing,
+                torch.addcmul(0.5 * center_bivector_coeff, grade4_square, cosh_correction),
+                split_grade4_coeff,
+            )
+            split_bivector_grade4_coeff = torch.where(
+                sinhc_coalescing,
+                torch.addcmul(center_bivector_grade4_coeff, grade4_square, sinhc_correction),
+                split_bivector_grade4_coeff,
+            )
+
         complex_scalar = torch.where(complex_mask, scalar_square, zeros)
         complex_nu = torch.sqrt(torch.where(complex_mask, -grade4_square, ones))
         (
@@ -1507,14 +1555,10 @@ class BivectorExpExecutor(nn.Module):
             complex_nu,
         )
 
-        base_scalar = torch.where(base_mask, scalar_square, zeros)
-        base_scalar_coeff, base_bivector_coeff = self._real_cosh_sinhc_sqrt(base_scalar)
-        base_grade4_coeff = 0.5 * base_bivector_coeff
-        base_bivector_grade4_coeff = self._real_sinhc_sqrt_derivative(
-            base_scalar,
-            base_scalar_coeff,
-            base_bivector_coeff,
-        )
+        base_scalar_coeff = center_scalar_coeff
+        base_bivector_coeff = center_bivector_coeff
+        base_grade4_coeff = 0.5 * center_bivector_coeff
+        base_bivector_grade4_coeff = center_bivector_grade4_coeff
 
         scalar_coeff = torch.where(
             split_mask,
@@ -1539,13 +1583,15 @@ class BivectorExpExecutor(nn.Module):
         return scalar_coeff, bivector_coeff, grade4_coeff, bivector_grade4_coeff
 
     def _real_cosh_sinhc_sqrt(self, values: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        positive = values > self.eps_sq
-        negative = values < -self.eps_sq
+        # Use the tighter cosh(sqrt(x)) remainder, x**4 / 8!, for the cutoff.
+        positive = values > self.real_exp_series_limit
+        negative = values < -self.real_exp_series_limit
         active = positive | negative
         theta = torch.sqrt(torch.where(active, values.abs(), torch.ones_like(values)))
         values_sq = values * values
-        cosh_series = 1.0 + 0.5 * values + values_sq / 24.0 + (values_sq * values) / 720.0
-        sinhc_series = 1.0 + values / 6.0 + values_sq / 120.0 + (values_sq * values) / 5040.0
+        values_cube = values_sq * values
+        cosh_series = 1.0 + 0.5 * values + values_sq / 24.0 + values_cube / 720.0
+        sinhc_series = 1.0 + values / 6.0 + values_sq / 120.0 + values_cube / 5040.0
         cosh_sqrt = torch.where(positive, torch.cosh(theta), torch.where(negative, torch.cos(theta), cosh_series))
         sinhc_sqrt = torch.where(
             positive,
@@ -1560,12 +1606,37 @@ class BivectorExpExecutor(nn.Module):
         cosh_sqrt: torch.Tensor,
         sinhc_sqrt: torch.Tensor,
     ) -> torch.Tensor:
-        active = values.abs() > self.eps_sq
+        # Balance the values**4 / 7_983_360 truncation term against roundoff
+        # amplified by the direct expression's division by values.
+        active = values.abs() > self.sinhc_derivative_series_limit
         safe_values = torch.where(active, values, torch.ones_like(values))
         raw = (cosh_sqrt - sinhc_sqrt) / (2.0 * safe_values)
         values_sq = values * values
-        series = 1.0 / 6.0 + values / 60.0 + values_sq / 1680.0 + (values_sq * values) / 90720.0
+        series = (
+            1.0 / 6.0
+            + values / 60.0
+            + values_sq / 1680.0
+            + (values_sq * values) / 90720.0
+        )
         return torch.where(active, raw, series)
+
+    def _real_coalescing_corrections(
+        self,
+        values: torch.Tensor,
+        sinhc_sqrt: torch.Tensor,
+        derivative: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        active = values.abs() > self.sinhc_derivative_series_limit
+        safe_values = torch.where(active, values, torch.ones_like(values))
+        cosh_raw = (sinhc_sqrt - 6.0 * derivative) / (48.0 * safe_values)
+        sinhc_raw = (
+            ((4.0 * safe_values + 60.0) * derivative - 10.0 * sinhc_sqrt)
+            / (96.0 * safe_values * safe_values)
+        )
+        values_sq = values * values
+        cosh_series = 1.0 / 720.0 + values / 10080.0 + values_sq / 362880.0
+        sinhc_series = 1.0 / 5040.0 + values / 90720.0 + values_sq / 3991680.0
+        return torch.where(active, cosh_raw, cosh_series), torch.where(active, sinhc_raw, sinhc_series)
 
     def _complex_biquadratic_coefficients(
         self,
@@ -1591,10 +1662,11 @@ class BivectorExpExecutor(nn.Module):
         imag: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         radius = torch.sqrt(real * real + imag * imag)
-        u_sq = (radius + real).clamp_min(0.0) * 0.5
-        v_sq = (radius - real).clamp_min(0.0) * 0.5
-        u = torch.sqrt(u_sq.clamp_min(self.eps_sq))
-        v = torch.sqrt(v_sq.clamp_min(self.eps_sq))
+        large = torch.sqrt(0.5 * (radius + real.abs()))
+        small = imag / (2.0 * large.clamp_min(self.eps))
+        nonnegative = real >= 0.0
+        u = torch.where(nonnegative, large, small)
+        v = torch.where(nonnegative, small, large)
         return u, v, radius
 
     def _left_matrix_exp(self, values: torch.Tensor) -> torch.Tensor:

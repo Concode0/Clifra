@@ -8,6 +8,8 @@ from clifra.core.execution.action import BivectorVectorGeneratorExecutor
 from clifra.core.execution.exp import (
     _filtered_eigenvalue_cauchy_inverse,
     _filtered_symmetric_eigh_op,
+    _spectral_local_nilpotent_coefficients_impl,
+    _spectral_local_sinc_impl,
     _symmetric_eigh_diagonal_perturbation,
 )
 from clifra.core.runtime.algebra import AlgebraContext
@@ -78,6 +80,132 @@ def test_bivector_exp_closed_biquadratic_matches_cpu_reference(signature):
     assert torch.allclose(actual, expected, atol=1e-10, rtol=1e-10)
 
 
+@pytest.mark.parametrize(
+    ("dtype", "power_start", "power_stop", "atol"),
+    [
+        (torch.float32, 3, 20, torch.finfo(torch.float32).eps),
+        (torch.float64, 23, 31, 1e-14),
+    ],
+)
+def test_bivector_exp_closed_biquadratic_resolves_degenerate_derivative_limit(
+    dtype,
+    power_start,
+    power_stop,
+    atol,
+):
+    algebra = AlgebraContext(2, 0, 2, device=DEVICE, dtype=dtype)
+    bivector_layout = algebra.layout((2,))
+    deltas = torch.tensor([2.0**-power for power in range(power_start, power_stop)], dtype=dtype)
+    values = torch.zeros(deltas.numel(), bivector_layout.dim, dtype=dtype)
+    positions = {index: position for position, index in enumerate(bivector_layout.basis_indices)}
+    values[:, positions[3]] = deltas
+    values[:, positions[6]] = 1.0
+    values[:, positions[9]] = 2.0
+
+    actual = algebra.bivector_exp(
+        values,
+        input_layout=bivector_layout,
+        output_layout=bivector_layout,
+    )
+
+    delta_sq = deltas.square()
+    sinhc = 1.0 - delta_sq / 6.0 + delta_sq.square() / 120.0
+    sinhc_derivative = 1.0 / 6.0 - delta_sq / 60.0 + delta_sq.square() / 1680.0
+    expected = torch.zeros_like(actual)
+    expected[:, positions[3]] = deltas * sinhc
+    expected[:, positions[6]] = sinhc
+    expected[:, positions[9]] = 2.0 * sinhc
+    expected[:, positions[12]] = -4.0 * deltas * sinhc_derivative
+
+    assert torch.allclose(actual, expected, atol=atol, rtol=atol)
+
+
+@pytest.mark.parametrize(
+    ("dtype", "power_start", "power_stop", "atol"),
+    [
+        (torch.float32, 3, 20, torch.finfo(torch.float32).eps),
+        (torch.float64, 23, 31, 1e-14),
+    ],
+)
+def test_bivector_exp_closed_biquadratic_resolves_coalescing_complex_roots(
+    dtype,
+    power_start,
+    power_stop,
+    atol,
+):
+    algebra = AlgebraContext(3, 1, 0, device=DEVICE, dtype=dtype)
+    bivector_layout = algebra.layout((2,))
+    even_layout = algebra.layout((0, 2, 4))
+    deltas = torch.tensor([2.0**-power for power in range(power_start, power_stop)], dtype=dtype)
+    values = torch.zeros(deltas.numel(), bivector_layout.dim, dtype=dtype)
+    input_positions = {index: position for position, index in enumerate(bivector_layout.basis_indices)}
+    output_positions = {index: position for position, index in enumerate(even_layout.basis_indices)}
+    values[:, input_positions[3]] = 1.0
+    values[:, input_positions[12]] = deltas
+
+    actual = algebra.bivector_exp(
+        values,
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+    )
+
+    expected = torch.zeros_like(actual)
+    expected[:, output_positions[0]] = torch.cos(torch.ones_like(deltas)) * torch.cosh(deltas)
+    expected[:, output_positions[3]] = torch.sin(torch.ones_like(deltas)) * torch.cosh(deltas)
+    expected[:, output_positions[12]] = torch.cos(torch.ones_like(deltas)) * torch.sinh(deltas)
+    expected[:, output_positions[15]] = torch.sin(torch.ones_like(deltas)) * torch.sinh(deltas)
+
+    assert torch.allclose(actual, expected, atol=atol, rtol=atol)
+
+
+@pytest.mark.parametrize(
+    ("dtype", "power_start", "power_stop", "atol"),
+    [
+        (torch.float32, 3, 12, torch.finfo(torch.float32).eps),
+        (torch.float64, 9, 26, 1e-14),
+    ],
+)
+def test_bivector_exp_closed_biquadratic_resolves_coalescing_real_roots(
+    dtype,
+    power_start,
+    power_stop,
+    atol,
+):
+    algebra = AlgebraContext(4, 1, 0, device=DEVICE, dtype=dtype)
+    bivector_layout = algebra.layout((2,))
+    even_layout = algebra.layout((0, 2, 4))
+    deltas = torch.tensor([2.0**-power for power in range(power_start, power_stop)], dtype=dtype)
+    simple_norms = 0.5 * deltas
+    null_weights = torch.sqrt(1.0 - simple_norms.square())
+    values = torch.zeros(deltas.numel(), bivector_layout.dim, dtype=dtype)
+    input_positions = {index: position for position, index in enumerate(bivector_layout.basis_indices)}
+    output_positions = {index: position for position, index in enumerate(even_layout.basis_indices)}
+    values[:, input_positions[3]] = 1.0
+    values[:, input_positions[12]] = 1.0
+    values[:, input_positions[20]] = null_weights
+
+    actual = algebra.bivector_exp(
+        values,
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+    )
+
+    simple_norms_sq = simple_norms.square()
+    simple_sinc = 1.0 - simple_norms_sq / 6.0 + simple_norms_sq.square() / 120.0
+    cos_one = torch.cos(torch.ones_like(deltas))
+    sin_one = torch.sin(torch.ones_like(deltas))
+    cos_simple = torch.cos(simple_norms)
+    expected = torch.zeros_like(actual)
+    expected[:, output_positions[0]] = cos_one * cos_simple
+    expected[:, output_positions[3]] = sin_one * cos_simple
+    expected[:, output_positions[12]] = cos_one * simple_sinc
+    expected[:, output_positions[20]] = cos_one * null_weights * simple_sinc
+    expected[:, output_positions[15]] = sin_one * simple_sinc
+    expected[:, output_positions[23]] = sin_one * null_weights * simple_sinc
+
+    assert torch.allclose(actual, expected, atol=atol, rtol=atol)
+
+
 def test_bivector_exp_closed_paths_have_finite_zero_gradients():
     for signature in [(3, 0, 0), (5, 0, 0)]:
         algebra = AlgebraContext(*signature, device=DEVICE, dtype=torch.float64)
@@ -95,6 +223,65 @@ def test_bivector_exp_closed_paths_have_finite_zero_gradients():
 
         assert values.grad is not None
         assert torch.isfinite(values.grad).all()
+
+
+@pytest.mark.parametrize(("dtype", "atol"), [(torch.float32, 1e-6), (torch.float64, 1e-14)])
+def test_spectral_local_nilpotent_coefficients_resolve_small_angle_limits(dtype, atol):
+    theta = torch.tensor(
+        [2.0**-power for power in range(4, 25)] + [0.10, 0.14, 0.20, 0.30, 0.50],
+        dtype=dtype,
+    )
+    theta_sq = theta.square()
+    theta_fourth = theta_sq.square()
+    theta_sixth = theta_fourth * theta_sq
+    theta_eighth = theta_fourth.square()
+    theta_tenth = theta_eighth * theta_sq
+    theta_twelfth = theta_sixth.square()
+    sinc = _spectral_local_sinc_impl(theta)
+
+    f2, g1, g2 = _spectral_local_nilpotent_coefficients_impl(theta, sinc, torch.cos(theta))
+
+    expected_sinc = (
+        1.0
+        - theta_sq / 6.0
+        + theta_fourth / 120.0
+        - theta_sixth / 5040.0
+        + theta_eighth / 362880.0
+        - theta_tenth / 39916800.0
+        + theta_twelfth / 6227020800.0
+    )
+    expected_f2 = (
+        1.0 / 24.0
+        - theta_sq / 240.0
+        + theta_fourth / 6720.0
+        - theta_sixth / 362880.0
+        + theta_eighth / 31933440.0
+        - theta_tenth / 4151347200.0
+        + theta_twelfth / 747242496000.0
+    )
+    expected_g1 = (
+        1.0 / 6.0
+        - theta_sq / 60.0
+        + theta_fourth / 1680.0
+        - theta_sixth / 90720.0
+        + theta_eighth / 7983360.0
+        - theta_tenth / 1037836800.0
+        + theta_twelfth / 186810624000.0
+    )
+    expected_g2 = (
+        1.0 / 120.0
+        - theta_sq / 1680.0
+        + theta_fourth / 60480.0
+        - theta_sixth / 3991680.0
+        + theta_eighth / 415134720.0
+        - theta_tenth / 62270208000.0
+        + theta_twelfth / 12703122432000.0
+    )
+
+    assert torch.allclose(sinc, expected_sinc, atol=atol, rtol=atol)
+    assert torch.allclose(f2, expected_f2, atol=atol, rtol=atol)
+    assert torch.allclose(g1, expected_g1, atol=atol, rtol=atol)
+    assert torch.allclose(g2, expected_g2, atol=atol, rtol=atol)
 
 
 def test_filtered_symmetric_eigh_backward_matches_torch_for_distinct_spectrum():
