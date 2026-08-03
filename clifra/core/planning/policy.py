@@ -15,6 +15,7 @@ import torch
 from clifra.core.foundation.basis import basis_count_for_grades, expand_output_grades, normalize_grades
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
 from clifra.core.planning.tree import GradePlanTree, build_grade_plan_tree
+from clifra.core.runtime.tensors import resolve_contract
 
 FULL_TABLE_AUTO_MAX_N = 8
 FULL_TABLE_EXPLICIT_MAX_N = 12
@@ -204,6 +205,7 @@ def estimate_product_executor_cost(
 
 def validate_layout_cost(algebra, layout: GradeLayout, *, role: str = "layout") -> GradeLayout:
     """Validate one compact layout against static lane limits."""
+    layout = resolve_contract(algebra, layout=layout, name=role).layout
     cost = PlanCost(
         spec=layout.spec,
         kind="layout",

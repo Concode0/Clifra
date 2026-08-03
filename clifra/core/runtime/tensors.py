@@ -36,6 +36,12 @@ def normalize_lane_storage(storage: LaneStorage | str) -> LaneStorage:
         raise ValueError("storage must be 'compact' or 'canonical'") from exc
 
 
+def check_layout_spec(spec: AlgebraSpec, layout: GradeLayout, name: str) -> None:
+    """Validate that ``layout`` belongs to ``spec``."""
+    if layout.spec != spec:
+        raise ValueError(f"{name} signature {layout.spec} does not match algebra signature {spec}")
+
+
 @dataclass(frozen=True)
 class TensorContract:
     """Resolved tensor lane contract: one semantic layout plus one storage form."""
@@ -126,28 +132,16 @@ class TensorContract:
         return torch.tensor(positions, dtype=torch.long, device=device)
 
 
-def check_layout_spec(spec: AlgebraSpec, layout: GradeLayout, name: str) -> None:
-    """Validate that ``layout`` belongs to ``spec``."""
-    if layout.spec != spec:
-        raise ValueError(f"{name} signature {layout.spec} does not match algebra signature {spec}")
+def _check_contract_spec(spec: AlgebraSpec, contract: TensorContract, name: str) -> TensorContract:
+    """Validate that ``contract`` belongs to the receiving ``spec``."""
+    if contract.spec != spec:
+        raise ValueError(f"{name} signature {contract.spec} does not match algebra signature {spec}")
+    return contract
 
 
 def resolve_layout(algebra_or_spec, *, layout: Optional[GradeLayout] = None, grades=None) -> GradeLayout:
-    """Resolve explicit layout metadata without inspecting tensor shapes."""
-    spec = algebra_or_spec if isinstance(algebra_or_spec, AlgebraSpec) else AlgebraSpec.from_algebra(algebra_or_spec)
-    if layout is not None:
-        check_layout_spec(spec, layout, "layout")
-        if grades is not None and layout.grades != normalize_grades(grades, spec.n, name="grades"):
-            raise ValueError("layout and grades disagree")
-        return layout
-    if grades is not None:
-        return spec.layout(grades)
-    default_grades = getattr(algebra_or_spec, "_default_grades", None)
-    if default_grades is not None:
-        return spec.layout(default_grades)
-    if hasattr(algebra_or_spec, "default_layout"):
-        return algebra_or_spec.default_layout()
-    return spec.full_layout()
+    """Resolve explicit layout metadata through a compact tensor contract."""
+    return resolve_contract(algebra_or_spec, layout=layout, grades=grades).layout
 
 
 def resolve_contract(
@@ -156,10 +150,29 @@ def resolve_contract(
     layout: Optional[GradeLayout] = None,
     grades=None,
     storage: LaneStorage | str = LaneStorage.COMPACT,
+    name: str = "layout",
 ) -> TensorContract:
     """Resolve a tensor contract from explicit semantic layout and storage."""
     spec = algebra_or_spec if isinstance(algebra_or_spec, AlgebraSpec) else AlgebraSpec.from_algebra(algebra_or_spec)
-    return TensorContract(spec=spec, layout=resolve_layout(algebra_or_spec, layout=layout, grades=grades), storage=storage)
+    if layout is not None:
+        contract = TensorContract(spec=layout.spec, layout=layout, storage=storage)
+        _check_contract_spec(spec, contract, name)
+        if grades is not None and layout.grades != normalize_grades(grades, spec.n, name="grades"):
+            grades_name = f"{name[:-7]}_grades" if name.endswith("_layout") else "grades"
+            raise ValueError(f"{name} and {grades_name} disagree")
+        return contract
+    if grades is not None:
+        resolved = spec.layout(grades)
+    else:
+        default_grades = getattr(algebra_or_spec, "_default_grades", None)
+        if default_grades is not None:
+            resolved = spec.layout(default_grades)
+        elif hasattr(algebra_or_spec, "default_layout"):
+            resolved = algebra_or_spec.default_layout()
+        else:
+            resolved = spec.full_layout()
+    contract = TensorContract(spec=resolved.spec, layout=resolved, storage=storage)
+    return _check_contract_spec(spec, contract, name)
 
 
 def infer_contract(
@@ -172,7 +185,10 @@ def infer_contract(
     side: str = "value",
 ) -> TensorContract:
     """Infer storage at a public boundary, then return an explicit contract."""
-    resolved = resolve_layout(spec, layout=layout, grades=grades)
+    if tensor.ndim < 1:
+        raise ValueError(f"{side} must include a coefficient lane dimension, got shape {tuple(tensor.shape)}")
+    resolved_contract = resolve_contract(spec, layout=layout, grades=grades, name=f"{side}_layout")
+    resolved = resolved_contract.layout
     if storage is None:
         if tensor.shape[-1] == resolved.dim:
             storage = LaneStorage.COMPACT
@@ -213,8 +229,8 @@ def canonical_values(algebra, value: torch.Tensor, *, layout: Optional[GradeLayo
 def union_layout(algebra_or_spec, left: GradeLayout, right: GradeLayout) -> GradeLayout:
     """Return a compact layout containing every grade from ``left`` and ``right``."""
     spec = algebra_or_spec if isinstance(algebra_or_spec, AlgebraSpec) else AlgebraSpec.from_algebra(algebra_or_spec)
-    check_layout_spec(spec, left, "left layout")
-    check_layout_spec(spec, right, "right layout")
+    left = resolve_contract(spec, layout=left, name="left layout").layout
+    right = resolve_contract(spec, layout=right, name="right layout").layout
     if left == right:
         return left
     grades = _grade_union(left.grades, right.grades)
