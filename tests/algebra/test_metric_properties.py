@@ -20,17 +20,17 @@ from clifra.core.runtime.forms import (
 )
 from clifra.core.runtime.metric import scalar_product, signature_magnitude
 from tests.helpers.hypothesis_cases import (
-    PROPERTY_SETTINGS,
+    CORE_PROPERTY_SETTINGS,
     compact_multivector_cases,
     signature_strategy,
     tensor_with_shape,
 )
 from tests.helpers.small_oracle import SmallCliffordOracle
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.property]
 
 
-@PROPERTY_SETTINGS
+@CORE_PROPERTY_SETTINGS
 @given(signature=signature_strategy(max_n=4), data=st.data())
 def test_full_lane_signed_scalar_forms_match_small_oracle(signature, data):
     algebra = AlgebraContext(*signature, device="cpu", dtype=torch.float64)
@@ -65,7 +65,7 @@ def test_full_lane_signed_scalar_forms_match_small_oracle(signature, data):
     )
 
 
-@PROPERTY_SETTINGS
+@CORE_PROPERTY_SETTINGS
 @given(case=compact_multivector_cases(), data=st.data())
 def test_compact_signed_scalar_forms_match_small_oracle(case, data):
     signature, grades, left = case
@@ -88,7 +88,7 @@ def test_compact_signed_scalar_forms_match_small_oracle(case, data):
     )
 
 
-@PROPERTY_SETTINGS
+@CORE_PROPERTY_SETTINGS
 @given(signature=signature_strategy(max_n=4), data=st.data())
 def test_lane_metrics_are_positive_coefficient_geometry(signature, data):
     algebra = AlgebraContext(*signature, device="cpu", dtype=torch.float64)

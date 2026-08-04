@@ -40,7 +40,7 @@ from tests.helpers.hypothesis_cases import (
 )
 from tests.helpers.small_oracle import SmallCliffordOracle
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.property]
 
 FUNCTIONAL_PRODUCTS = {
     "gp": geometric_product,
@@ -109,7 +109,9 @@ def test_functional_unary_helpers_match_small_oracle(case, data):
     assert torch.allclose(clifford_conjugation(algebra, values), oracle.clifford_conjugation(values))
     assert torch.allclose(pseudoscalar_product(algebra, values), oracle.pseudoscalar_product(values))
     assert torch.allclose(signature_norm_squared(algebra, values), oracle.signature_norm_squared(values))
-    assert torch.allclose(grade_projection(algebra, values, grade), grade_layout.compact(oracle.project(values, (grade,))))
+    assert torch.allclose(
+        grade_projection(algebra, values, grade), grade_layout.compact(oracle.project(values, (grade,)))
+    )
 
 
 def test_functional_product_rejects_unknown_op():
@@ -147,7 +149,10 @@ def test_functional_host_operation_helpers_delegate_to_algebra():
     vector = torch.randn(2, vector_layout.dim, dtype=torch.float64)
     normal = torch.randn(2, vector_layout.dim, dtype=torch.float64)
 
-    assert torch.allclose(blade_inverse(algebra, normal, input_layout=vector_layout), algebra.blade_inverse(normal, input_layout=vector_layout))
+    assert torch.allclose(
+        blade_inverse(algebra, normal, input_layout=vector_layout),
+        algebra.blade_inverse(normal, input_layout=vector_layout),
+    )
     assert torch.allclose(
         blade_project(algebra, vector, normal, input_layout=vector_layout, blade_layout=vector_layout),
         algebra.blade_project(vector, normal, input_layout=vector_layout, blade_layout=vector_layout),
@@ -164,4 +169,6 @@ def test_functional_host_operation_helpers_delegate_to_algebra():
         versor_product(algebra, normal, vector, versor_layout=vector_layout, input_layout=vector_layout),
         algebra.versor_product(normal, vector, versor_layout=vector_layout, input_layout=vector_layout),
     )
-    assert torch.allclose(grade_norms(algebra, vector, layout=vector_layout), algebra.grade_norms(vector, layout=vector_layout))
+    assert torch.allclose(
+        grade_norms(algebra, vector, layout=vector_layout), algebra.grade_norms(vector, layout=vector_layout)
+    )

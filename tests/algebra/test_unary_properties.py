@@ -10,7 +10,7 @@ from hypothesis import strategies as st
 
 from clifra.core.runtime.algebra import AlgebraContext
 from tests.helpers.hypothesis_cases import (
-    PROPERTY_SETTINGS,
+    CORE_PROPERTY_SETTINGS,
     compact_multivector_cases,
     full_multivector_cases,
     signature_strategy,
@@ -18,7 +18,7 @@ from tests.helpers.hypothesis_cases import (
 )
 from tests.helpers.small_oracle import SmallCliffordOracle
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.property]
 
 UNARY_ORACLES = {
     "reverse": SmallCliffordOracle.reverse,
@@ -27,7 +27,7 @@ UNARY_ORACLES = {
 }
 
 
-@PROPERTY_SETTINGS
+@CORE_PROPERTY_SETTINGS
 @given(case=full_multivector_cases())
 def test_full_lane_unary_involutions_match_small_oracle(case):
     signature, values = case
@@ -42,7 +42,7 @@ def test_full_lane_unary_involutions_match_small_oracle(case):
         assert torch.allclose(getattr(algebra, op)(actual), values, atol=1e-12, rtol=1e-12)
 
 
-@PROPERTY_SETTINGS
+@CORE_PROPERTY_SETTINGS
 @given(case=compact_multivector_cases())
 def test_compact_unary_involutions_match_small_oracle(case):
     signature, grades, values = case
@@ -57,7 +57,7 @@ def test_compact_unary_involutions_match_small_oracle(case):
         assert torch.allclose(actual, expected, atol=1e-12, rtol=1e-12)
 
 
-@PROPERTY_SETTINGS
+@CORE_PROPERTY_SETTINGS
 @given(case=full_multivector_cases(max_n=5), data=st.data())
 def test_grade_projection_matches_small_oracle(case, data):
     signature, values = case
@@ -72,7 +72,7 @@ def test_grade_projection_matches_small_oracle(case, data):
     assert torch.allclose(actual, expected, atol=1e-12, rtol=1e-12)
 
 
-@PROPERTY_SETTINGS
+@CORE_PROPERTY_SETTINGS
 @given(case=compact_multivector_cases())
 def test_signature_norm_squared_matches_small_oracle_for_declared_layouts(case):
     signature, grades, values = case
@@ -86,7 +86,7 @@ def test_signature_norm_squared_matches_small_oracle_for_declared_layouts(case):
     assert torch.allclose(actual, expected, atol=1e-12, rtol=1e-12)
 
 
-@PROPERTY_SETTINGS
+@CORE_PROPERTY_SETTINGS
 @given(case=compact_multivector_cases())
 def test_pseudoscalar_product_matches_small_oracle_for_declared_layouts(case):
     signature, grades, values = case
@@ -104,7 +104,7 @@ def test_pseudoscalar_product_matches_small_oracle_for_declared_layouts(case):
     assert torch.allclose(actual, expected, atol=1e-12, rtol=1e-12)
 
 
-@PROPERTY_SETTINGS
+@CORE_PROPERTY_SETTINGS
 @given(case=compact_multivector_cases())
 def test_blade_inverse_matches_small_oracle_for_declared_layouts(case):
     signature, grades, values = case
@@ -119,7 +119,7 @@ def test_blade_inverse_matches_small_oracle_for_declared_layouts(case):
     assert torch.allclose(actual, expected, atol=1e-10, rtol=1e-10)
 
 
-@PROPERTY_SETTINGS
+@CORE_PROPERTY_SETTINGS
 @given(signature=signature_strategy(min_n=1, max_n=5), data=st.data())
 def test_vector_reflection_matches_small_oracle_sandwich(signature, data):
     p, q, _ = signature
@@ -156,3 +156,50 @@ def test_vector_reflection_matches_small_oracle_sandwich(signature, data):
     )
 
     assert torch.allclose(actual, expected, atol=1e-12, rtol=1e-12)
+
+
+@CORE_PROPERTY_SETTINGS
+@given(signature=signature_strategy(min_n=1, max_n=4), data=st.data())
+def test_projection_rejection_and_versor_product_match_operational_oracle(signature, data):
+    algebra = AlgebraContext(*signature, device="cpu", dtype=torch.float64)
+    oracle = SmallCliffordOracle(*signature)
+    grade = data.draw(st.integers(min_value=0, max_value=algebra.n))
+    layout = algebra.layout((grade,))
+    batch = data.draw(st.integers(min_value=1, max_value=2))
+    values = data.draw(tensor_with_shape((batch, layout.dim)))
+    blade = data.draw(tensor_with_shape((batch, layout.dim)))
+
+    expected_projection = oracle.blade_project(
+        values,
+        blade,
+        input_indices=layout.basis_indices,
+        blade_indices=layout.basis_indices,
+        output_indices=layout.basis_indices,
+    )
+    expected_versor = oracle.versor_product(
+        blade,
+        values,
+        versor_indices=layout.basis_indices,
+        input_indices=layout.basis_indices,
+        output_indices=layout.basis_indices,
+    )
+
+    actual_projection = algebra.blade_project(
+        values,
+        blade,
+        input_layout=layout,
+        blade_layout=layout,
+        output_layout=layout,
+    )
+    actual_rejection = algebra.blade_reject(values, blade, input_layout=layout, blade_layout=layout)
+    actual_versor = algebra.versor_product(
+        blade,
+        values,
+        versor_layout=layout,
+        input_layout=layout,
+        output_layout=layout,
+    )
+
+    assert torch.allclose(actual_projection, expected_projection, atol=1e-10, rtol=1e-10)
+    assert torch.allclose(actual_rejection, values - expected_projection, atol=1e-10, rtol=1e-10)
+    assert torch.allclose(actual_versor, expected_versor, atol=1e-10, rtol=1e-10)

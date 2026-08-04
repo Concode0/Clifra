@@ -265,7 +265,6 @@ def test_no_clipping_when_disabled(algebra_3d, rotor_layer):
 # Convergence Tests
 
 
-@pytest.mark.slow
 def test_convergence_synthetic_rotation_sgd(algebra_3d):
     """Fit a known rotor transformation using ExponentialSGD."""
     # Ground truth: rotation in e12 plane (index 3 is e12 bivector)
@@ -297,7 +296,6 @@ def test_convergence_synthetic_rotation_sgd(algebra_3d):
     assert final_loss < 1e-3, f"Loss too high: {final_loss}"
 
 
-@pytest.mark.slow
 def test_convergence_synthetic_rotation_adam(algebra_3d):
     """Fit a known rotor transformation using RiemannianAdam."""
     # Ground truth: rotation in e12 plane (index 3 is e12 bivector)
@@ -329,7 +327,6 @@ def test_convergence_synthetic_rotation_adam(algebra_3d):
     assert final_loss < 1e-3, f"Loss too high: {final_loss}"
 
 
-@pytest.mark.slow
 def test_compare_sgd_convergence(algebra_3d):
     """Compare ExponentialSGD vs standard SGD on simple task."""
     # Target: learn a specific transformation (not mapping to zero, which rotors can't do)
@@ -374,7 +371,6 @@ def test_compare_sgd_convergence(algebra_3d):
 # Geometric Validation
 
 
-@pytest.mark.slow
 def test_rotor_manifold_membership_after_optimization(algebra_3d):
     """Verify rotors remain on manifold: ~RR ~= 1 after optimization."""
     layer = VersorLayer(algebra_3d, channels=4)
@@ -408,7 +404,6 @@ def test_rotor_manifold_membership_after_optimization(algebra_3d):
     assert torch.allclose(RR_rev, identity, atol=1e-3)
 
 
-@pytest.mark.slow
 def test_isometry_preservation(algebra_3d):
     """Verify rotors preserve norms: ||R.x.~R|| = ||x||."""
     layer = VersorLayer(algebra_3d, channels=4)
@@ -775,7 +770,6 @@ def test_direct_parameter_groups_do_not_apply_spin_retraction_implicitly(algebra
     assert norms.max() > 10.0
 
 
-@pytest.mark.slow
 def test_mixed_model_convergence(algebra_3d):
     """Verify optimizer converges with mixed manifold parameter groups."""
     from clifra.layers.primitives.reflection import ReflectionLayer

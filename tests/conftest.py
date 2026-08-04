@@ -2,10 +2,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from hypothesis import HealthCheck, settings
 
 from clifra.core.runtime.algebra import AlgebraContext
 
 DEVICE = "cpu"
+
+_PBT_SETTINGS = {
+    "deadline": None,
+    "print_blob": True,
+    "suppress_health_check": (HealthCheck.function_scoped_fixture,),
+}
+
+settings.register_profile("standard", settings(), max_examples=100, **_PBT_SETTINGS)
+settings.register_profile("full", settings.get_profile("standard"), max_examples=400)
+settings.load_profile("standard")
 
 
 # -- Function-scoped (default) ------------------------------------------
@@ -37,6 +48,7 @@ def algebra_minkowski():
 @pytest.fixture
 def algebra_conformal():
     return AlgebraContext(p=4, q=1, device=DEVICE)
+
 
 # -- Module-scoped (used by test_geodesic.py - exact name match) ----------
 @pytest.fixture(scope="module")

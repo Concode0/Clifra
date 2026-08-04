@@ -106,7 +106,7 @@ ignore = [
 pythonpath = ["."]
 testpaths = ["tests"]
 markers = [
-    "slow: long-running tests (deselect with '-m \"not slow\"')",
+    "property: property-based or generated exhaustive verification",
     "integration: tests requiring external data or network access",
     "unit: fast, self-contained unit tests",
 ]

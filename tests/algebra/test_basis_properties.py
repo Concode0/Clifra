@@ -21,9 +21,9 @@ from clifra.core.foundation.basis import (
 )
 from clifra.core.foundation.layout import AlgebraSpec
 from clifra.core.runtime.algebra import AlgebraContext
-from tests.helpers.hypothesis_cases import PRODUCT_OPS, PROPERTY_SETTINGS, compact_multivector_cases, grade_sets
+from tests.helpers.hypothesis_cases import CORE_PROPERTY_SETTINGS, PRODUCT_OPS, compact_multivector_cases, grade_sets
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.property]
 
 
 def test_grade_layout_defers_basis_enumeration_until_indices_are_requested():
@@ -38,7 +38,7 @@ def test_grade_layout_defers_basis_enumeration_until_indices_are_requested():
     assert small._basis_indices is small.basis_indices
 
 
-@PROPERTY_SETTINGS
+@CORE_PROPERTY_SETTINGS
 @given(n=st.integers(min_value=0, max_value=12), data=st.data())
 def test_basis_indices_for_grades_are_combinatorial(data, n):
     grades = data.draw(st.sampled_from(grade_sets(n)))
@@ -51,7 +51,7 @@ def test_basis_indices_for_grades_are_combinatorial(data, n):
     assert len(indices) == sum(comb(n, grade) for grade in grades)
 
 
-@PROPERTY_SETTINGS
+@CORE_PROPERTY_SETTINGS
 @given(n=st.integers(min_value=1, max_value=6), op=st.sampled_from(PRODUCT_OPS), data=st.data())
 def test_product_output_grades_match_basis_pair_support(data, n, op):
     left_grade = data.draw(st.integers(min_value=0, max_value=n))
@@ -69,7 +69,7 @@ def test_product_output_grades_match_basis_pair_support(data, n, op):
     assert tuple(sorted(supported)) == product_output_grades(left_grade, right_grade, n, op=op)
 
 
-@PROPERTY_SETTINGS
+@CORE_PROPERTY_SETTINGS
 @given(n=st.integers(min_value=1, max_value=6), op=st.sampled_from(PRODUCT_OPS), data=st.data())
 def test_expand_output_grades_is_union_of_homogeneous_routes(data, n, op):
     left_grades = data.draw(st.sampled_from(grade_sets(n)))
@@ -101,7 +101,7 @@ def test_expand_output_grades_is_union_of_homogeneous_routes(data, n, op):
             expand_output_grades(left_grades, right_grades, n, op=op, project_grades=projected)
 
 
-@PROPERTY_SETTINGS
+@CORE_PROPERTY_SETTINGS
 @given(case=compact_multivector_cases(max_n=5))
 def test_grade_layout_compact_full_round_trip(case):
     signature, grades, values = case
