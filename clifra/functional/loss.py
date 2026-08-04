@@ -15,7 +15,9 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
+from clifra.core.foundation.layout import GradeLayout
 from clifra.core.runtime.energy import lane_grade_distribution
+from clifra.core.runtime.tensors import compact_values
 
 
 def geometric_mse(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -49,11 +51,17 @@ def isometry_loss(pred: torch.Tensor, target: torch.Tensor, metric_diag: torch.T
     return F.mse_loss(pred_norm, target_norm)
 
 
-def bivector_regularization(algebra, values: torch.Tensor, *, grade: int = 2) -> torch.Tensor:
-    """Penalize energy outside one target grade in full-lane ``[..., D]`` multivectors."""
-    target_part = algebra.grade_projection(values, grade)
-    residual = values - target_part
-    return (residual**2).sum(dim=-1).mean()
+def bivector_regularization(
+    algebra,
+    values: torch.Tensor,
+    *,
+    grade: int = 2,
+    layout: GradeLayout | None = None,
+) -> torch.Tensor:
+    """Penalize energy outside one target grade in canonical or compact multivectors."""
+    compact, resolved = compact_values(algebra, values, layout=layout)
+    penalty_mask = resolved.grade_indices_tensor(device=compact.device) != int(grade)
+    return subspace_penalty(compact, penalty_mask)
 
 
 def grade_energy_regularization(algebra, features: torch.Tensor, target: torch.Tensor) -> torch.Tensor:

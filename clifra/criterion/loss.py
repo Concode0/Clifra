@@ -7,6 +7,7 @@
 import torch
 import torch.nn as nn
 
+from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.module import CliffordModule
 from clifra.functional.loss import (
     asymmetry_penalty,
@@ -79,14 +80,15 @@ class IsometryLoss(CliffordModule):
 class BivectorRegularization(CliffordModule):
     """Regularize multivectors toward one target grade."""
 
-    def __init__(self, algebra, grade=2):
+    def __init__(self, algebra, grade=2, *, layout: GradeLayout | None = None):
         """Initialize grade regularization."""
         super().__init__(algebra)
         self.grade = grade
+        self.layout = layout
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Penalize energy outside ``grade``."""
-        return bivector_regularization(self.algebra, x, grade=self.grade)
+        return bivector_regularization(self.algebra, x, grade=self.grade, layout=self.layout)
 
 
 class GradeEnergyRegularization(CliffordModule):
