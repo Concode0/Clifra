@@ -22,13 +22,8 @@ from clifra.core.execution.metric import SignatureNormSquaredExecutor
 from clifra.core.execution.permutation import PseudoscalarProductExecutor
 from clifra.core.execution.product import FullTableProductExecutor, GradeProductExecutor
 from clifra.core.foundation.basis import (
-    basis_count_for_grades,
-    basis_index_tuple_for_grades,
     basis_indices_for_grades,
     expand_output_grades,
-    geometric_product_output_grades,
-    operation_coefficient,
-    product_output_grades,
 )
 from clifra.core.foundation.layout import AlgebraSpec
 from clifra.core.planning.flow import GradeFlow

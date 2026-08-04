@@ -22,6 +22,16 @@ from clifra.core.planning.product import estimate_product_executor_cost
 from clifra.core.runtime.tensors import TensorContract, _check_contract_spec
 
 
+def _contract(spec, layout, role: str) -> TensorContract:
+    return _check_contract_spec(spec, TensorContract.compact(layout.spec, layout), f"{role}_layout")
+
+
+def _bind_contracts(plan, *roles: str) -> None:
+    spec = plan.input_layout.spec
+    for role in roles:
+        object.__setattr__(plan, f"{role}_contract", _contract(spec, getattr(plan, f"{role}_layout"), role))
+
+
 @dataclass(frozen=True)
 class LinearActionPlan:
     """Resolved contract for a vector-space action lifted to multivector grades."""
@@ -32,10 +42,7 @@ class LinearActionPlan:
     output_contract: TensorContract = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        spec = self.input_layout.spec
-        object.__setattr__(self, "input_contract", TensorContract.compact(spec, self.input_layout))
-        output_contract = TensorContract.compact(self.output_layout.spec, self.output_layout)
-        object.__setattr__(self, "output_contract", _check_contract_spec(spec, output_contract, "output_layout"))
+        _bind_contracts(self, "input", "output")
 
     @property
     def input_grades(self) -> tuple[int, ...]:
@@ -65,16 +72,7 @@ class VersorActionPlan:
     parameter_contract: TensorContract = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        spec = self.input_layout.spec
-        object.__setattr__(self, "input_contract", TensorContract.compact(spec, self.input_layout))
-        for role in ("output", "parameter"):
-            layout = getattr(self, f"{role}_layout")
-            contract = TensorContract.compact(layout.spec, layout)
-            object.__setattr__(
-                self,
-                f"{role}_contract",
-                _check_contract_spec(spec, contract, f"{role}_layout"),
-            )
+        _bind_contracts(self, "input", "output", "parameter")
 
     @property
     def linear_action(self) -> LinearActionPlan:
@@ -102,16 +100,7 @@ class PairedBivectorActionPlan:
     middle_contract: TensorContract = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        spec = self.input_layout.spec
-        object.__setattr__(self, "input_contract", TensorContract.compact(spec, self.input_layout))
-        for role in ("output", "parameter", "rotor", "middle"):
-            layout = getattr(self, f"{role}_layout")
-            contract = TensorContract.compact(layout.spec, layout)
-            object.__setattr__(
-                self,
-                f"{role}_contract",
-                _check_contract_spec(spec, contract, f"{role}_layout"),
-            )
+        _bind_contracts(self, "input", "output", "parameter", "rotor", "middle")
 
     @property
     def input_grades(self) -> tuple[int, ...]:
@@ -131,11 +120,9 @@ def build_linear_action_plan(
 ) -> LinearActionPlan:
     """Build a plan-only linear action contract."""
     spec = input_layout.spec
-    input_contract = TensorContract.compact(spec, input_layout)
     output_layout = input_layout if output_layout is None else output_layout
-    output_contract = TensorContract.compact(output_layout.spec, output_layout)
-    _check_contract_spec(spec, output_contract, "output_layout")
-    return LinearActionPlan(input_layout=input_contract.layout, output_layout=output_contract.layout)
+    _contract(spec, output_layout, "output")
+    return LinearActionPlan(input_layout=input_layout, output_layout=output_layout)
 
 
 def build_versor_action_plan(
@@ -153,27 +140,23 @@ def build_versor_action_plan(
         raise ValueError("planned versor actions currently support grade=1 and grade=2")
     output_layout = input_layout if output_layout is None else output_layout
     parameter_layout = algebra.layout((grade,)) if parameter_layout is None else parameter_layout
-    input_contract = _check_contract_spec(spec, TensorContract.compact(input_layout.spec, input_layout), "input_layout")
-    output_contract = _check_contract_spec(
-        spec, TensorContract.compact(output_layout.spec, output_layout), "output_layout"
-    )
-    parameter_contract = _check_contract_spec(
-        spec, TensorContract.compact(parameter_layout.spec, parameter_layout), "parameter_layout"
-    )
+    input_layout = _contract(spec, input_layout, "input").layout
+    output_layout = _contract(spec, output_layout, "output").layout
+    parameter_layout = _contract(spec, parameter_layout, "parameter").layout
     if parameter_layout.grades != (grade,):
         raise ValueError(f"parameter_layout must contain grade {grade}, got {parameter_layout.grades}")
     decision = _select_versor_action_route(
         algebra,
         grade=grade,
-        input_layout=input_contract.layout,
-        output_layout=output_contract.layout,
-        parameter_layout=parameter_contract.layout,
+        input_layout=input_layout,
+        output_layout=output_layout,
+        parameter_layout=parameter_layout,
     )
     return VersorActionPlan(
         grade=grade,
-        input_layout=input_contract.layout,
-        output_layout=output_contract.layout,
-        parameter_layout=parameter_contract.layout,
+        input_layout=input_layout,
+        output_layout=output_layout,
+        parameter_layout=parameter_layout,
         execution_path=decision.route,
         route_facts=decision.facts,
         route_score=decision.score,
@@ -197,12 +180,8 @@ def build_paired_bivector_action_plan(
     """
     spec = AlgebraSpec.from_algebra(algebra)
     parameter_layout = algebra.layout((2,)) if parameter_layout is None else parameter_layout
-    input_contract = _check_contract_spec(spec, TensorContract.compact(input_layout.spec, input_layout), "input_layout")
-    parameter_contract = _check_contract_spec(
-        spec, TensorContract.compact(parameter_layout.spec, parameter_layout), "parameter_layout"
-    )
-    input_layout = input_contract.layout
-    parameter_layout = parameter_contract.layout
+    input_layout = _contract(spec, input_layout, "input").layout
+    parameter_layout = _contract(spec, parameter_layout, "parameter").layout
     if parameter_layout.grades != (2,):
         raise ValueError(f"parameter_layout must contain grade 2, got {parameter_layout.grades}")
 
@@ -211,20 +190,18 @@ def build_paired_bivector_action_plan(
     middle_layout = spec.layout(middle_grades)
     inferred_output = spec.layout(expand_output_grades(middle_layout.grades, rotor_layout.grades, spec.n, op="gp"))
     output_layout = inferred_output if output_layout is None else output_layout
-    output_contract = _check_contract_spec(
-        spec, TensorContract.compact(output_layout.spec, output_layout), "output_layout"
-    )
+    output_layout = _contract(spec, output_layout, "output").layout
     decision = _select_paired_action_route(
         algebra,
         input_layout=input_layout,
-        output_layout=output_contract.layout,
+        output_layout=output_layout,
         parameter_layout=parameter_layout,
         rotor_layout=rotor_layout,
         middle_layout=middle_layout,
     )
     return PairedBivectorActionPlan(
         input_layout=input_layout,
-        output_layout=output_contract.layout,
+        output_layout=output_layout,
         parameter_layout=parameter_layout,
         rotor_layout=rotor_layout,
         middle_layout=middle_layout,
@@ -258,10 +235,9 @@ def _select_versor_action_route(algebra, *, grade, input_layout, output_layout, 
     exp_facts = PlanFacts()
     rotor_intermediate_lanes = max(input_layout.dim, output_layout.dim)
     if grade == 2:
-        rotor_layout = AlgebraSpec.from_algebra(algebra).layout(range(0, algebra.n + 1, 2))
-        middle_layout = AlgebraSpec.from_algebra(algebra).layout(
-            expand_output_grades(rotor_layout.grades, input_layout.grades, algebra.n, op="gp")
-        )
+        spec = AlgebraSpec.from_algebra(algebra)
+        rotor_layout = spec.layout(range(0, algebra.n + 1, 2))
+        middle_layout = spec.layout(expand_output_grades(rotor_layout.grades, input_layout.grades, algebra.n, op="gp"))
         exp_facts = _bivector_exp_facts(algebra, parameter_layout, rotor_layout)
         left_facts = _product_facts(algebra, rotor_layout, input_layout, middle_layout)
         right_facts = _product_facts(algebra, middle_layout, rotor_layout, output_layout)
@@ -270,21 +246,10 @@ def _select_versor_action_route(algebra, *, grade, input_layout, output_layout, 
             left_facts,
             right_facts,
             peak_bytes=(rotor_layout.dim + middle_layout.dim + output_layout.dim) * dtype_bytes,
-            extensions={"action.exp_rank_deficit": 0.0 if exp_facts.exact else exp_facts["exp.rank_deficit"]},
+            extensions=_exp_extensions(exp_facts),
         )
         rotor_intermediate_lanes = middle_layout.dim
-    full_matrix_facts = PlanFacts(
-        float(algebra.dim**2),
-        float(algebra.dim**2 * 2),
-        algebra.dim**2 * dtype_bytes,
-        algebra.dim**2,
-    )
-    full_action_facts = compose_plan_facts(
-        exp_facts,
-        full_matrix_facts,
-        peak_bytes=(algebra.dim**2 + 2 * algebra.dim) * dtype_bytes,
-        extensions={"action.exp_rank_deficit": 0.0 if exp_facts.exact else exp_facts["exp.rank_deficit"]},
-    )
+    full_action_facts = _full_action_facts(algebra, exp_facts, 1, dtype_bytes)
     candidates = (
         _action_candidate(
             algebra,
@@ -340,21 +305,9 @@ def _select_paired_action_route(
         left_facts,
         right_facts,
         peak_bytes=(2 * rotor_layout.dim + middle_layout.dim + output_layout.dim) * dtype_bytes,
-        extensions={"action.exp_rank_deficit": 0.0 if exp_facts.exact else exp_facts["exp.rank_deficit"]},
+        extensions=_exp_extensions(exp_facts),
     )
-    full_matrix_facts = PlanFacts(
-        float(algebra.dim**2),
-        float(algebra.dim**2 * 2),
-        algebra.dim**2 * dtype_bytes,
-        algebra.dim**2,
-    )
-    full_action_facts = compose_plan_facts(
-        exp_facts,
-        exp_facts,
-        full_matrix_facts,
-        peak_bytes=(algebra.dim**2 + 4 * algebra.dim) * dtype_bytes,
-        extensions={"action.exp_rank_deficit": 0.0 if exp_facts.exact else exp_facts["exp.rank_deficit"]},
-    )
+    full_action_facts = _full_action_facts(algebra, exp_facts, 2, dtype_bytes)
     candidates = (
         _action_candidate(
             algebra,
@@ -378,6 +331,23 @@ def _select_paired_action_route(
         ),
     )
     return select_policy_route(algebra.planning_policy, candidates)
+
+
+def _exp_extensions(facts: PlanFacts) -> dict[str, float]:
+    return {"action.exp_rank_deficit": 0.0 if facts.exact else facts["exp.rank_deficit"]}
+
+
+def _full_action_facts(algebra, exp_facts: PlanFacts, exp_count: int, dtype_bytes: int) -> PlanFacts:
+    matrix_elements = algebra.dim**2
+    matrix = PlanFacts(
+        float(matrix_elements), float(2 * matrix_elements), matrix_elements * dtype_bytes, matrix_elements
+    )
+    return compose_plan_facts(
+        *((exp_facts,) * exp_count),
+        matrix,
+        peak_bytes=(matrix_elements + 2 * exp_count * algebra.dim) * dtype_bytes,
+        extensions=_exp_extensions(exp_facts),
+    )
 
 
 def _product_facts(algebra, left_layout, right_layout, output_layout) -> PlanFacts:

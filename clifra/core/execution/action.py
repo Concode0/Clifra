@@ -370,15 +370,74 @@ class FullSandwichActionExecutor(nn.Module):
         return self.gp_sign_t
 
 
-class _VersorFactorPlanMixin:
-    """Shared preplanned factor construction for full-layout versor actions."""
+class _VersorActionExecutor(nn.Module):
+    """Shared execution setup for single and mixed versor actions."""
 
-    def _configure_versor_factor_plans(self, algebra, *, grade: int, parameter_layout: GradeLayout) -> None:
+    action_name = "versor"
+
+    def __init__(
+        self,
+        algebra,
+        *,
+        grade: int,
+        input_layout: GradeLayout,
+        output_layout: GradeLayout,
+        parameter_layout: GradeLayout,
+        execution_path: str,
+    ):
+        super().__init__()
+        object.__setattr__(self, "algebra", algebra)
+        self.input_contract = resolve_contract(algebra, layout=input_layout, name="input_layout")
+        self.output_contract = resolve_contract(algebra, layout=output_layout, name="output_layout")
+        self.parameter_contract = resolve_contract(algebra, layout=parameter_layout, name="parameter_layout")
+        self.input_layout = self.input_contract.layout
+        self.output_layout = self.output_contract.layout
+        self.parameter_layout = self.parameter_contract.layout
+        self.grade = int(grade)
+        if self.grade not in {1, 2}:
+            raise ValueError(f"planned {self.action_name} execution currently supports grade=1 and grade=2")
+
+        self.execution_path = str(execution_path)
+        if self.execution_path not in {"vector_matrix", "rotor_product", "full_action_matrix"}:
+            raise ValueError(f"unsupported {self.action_name} action execution path {self.execution_path!r}")
+        self.use_full_action = self.execution_path == "full_action_matrix"
+        self.use_rotor_product_action = self.execution_path == "rotor_product"
+        self.action = None
+        self.vector_matrix = None
+        self.left_product = None
+        self.right_product = None
+        self.middle_layout = None
+        self.full_action = (
+            FullSandwichActionExecutor.from_layout(
+                self.input_layout,
+                device=getattr(algebra, "device", None),
+                dtype=getattr(algebra, "dtype", torch.float32),
+            )
+            if self.use_full_action
+            else None
+        )
+        if not self.use_full_action and not self.use_rotor_product_action:
+            self.action = GradedLinearActionExecutor(
+                input_layout=self.input_layout,
+                output_layout=self.output_layout,
+            )
+            self.vector_matrix = VersorVectorMatrixExecutor(
+                grade=self.grade,
+                parameter_layout=self.parameter_layout,
+                eps=algebra.eps_sq,
+                dtype=getattr(algebra, "dtype", torch.float32),
+                device=getattr(algebra, "device", None),
+            )
+        self._configure_versor_factor_plans(algebra)
+        if self.use_rotor_product_action:
+            self._configure_rotor_product_action(algebra)
+
+    def _configure_versor_factor_plans(self, algebra) -> None:
         self.full_dim = int(algebra.dim)
         self.eps_sq = float(algebra.eps_sq)
         self.rotor_layout = (
-            parameter_layout.spec.layout(range(0, parameter_layout.spec.n + 1, 2))
-            if int(grade) == 2 and (self.use_full_action or getattr(self, "use_rotor_product_action", False))
+            self.parameter_layout.spec.layout(range(0, self.parameter_layout.spec.n + 1, 2))
+            if self.grade == 2 and (self.use_full_action or self.use_rotor_product_action)
             else None
         )
         device = getattr(algebra, "device", None)
@@ -394,13 +453,13 @@ class _VersorFactorPlanMixin:
             "parameter_full_indices", torch.empty(0, dtype=torch.long, device=device), persistent=False
         )
 
-        if not self.use_full_action and not getattr(self, "use_rotor_product_action", False):
+        if not self.use_full_action and not self.use_rotor_product_action:
             return
-        if int(grade) == 2:
+        if self.grade == 2:
             if self.rotor_layout is None:
                 raise RuntimeError("grade-2 rotor product actions require a rotor layout")
             self.bivector_exp = algebra.plan_bivector_exp(
-                input_layout=parameter_layout,
+                input_layout=self.parameter_layout,
                 output_layout=self.rotor_layout,
                 dtype=dtype,
                 device=device,
@@ -417,25 +476,47 @@ class _VersorFactorPlanMixin:
             return
 
         self.parameter_signature_norm_squared = algebra.plan_signature_norm_squared(
-            input_layout=parameter_layout,
+            input_layout=self.parameter_layout,
             dtype=dtype,
             device=device,
         )
         self.parameter_involution = algebra.plan_unary(
             op="grade_involution",
-            input_layout=parameter_layout,
-            output_layout=parameter_layout,
+            input_layout=self.parameter_layout,
+            output_layout=self.parameter_layout,
             dtype=dtype,
             device=device,
         )
         self.parameter_reverse = algebra.plan_unary(
             op="reverse",
-            input_layout=parameter_layout,
-            output_layout=parameter_layout,
+            input_layout=self.parameter_layout,
+            output_layout=self.parameter_layout,
             dtype=dtype,
             device=device,
         )
-        self.parameter_full_indices = _layout_indices(parameter_layout, device=device)
+        self.parameter_full_indices = _layout_indices(self.parameter_layout, device=device)
+
+    def _configure_rotor_product_action(self, algebra) -> None:
+        device = getattr(algebra, "device", None)
+        dtype = getattr(algebra, "dtype", torch.float32)
+        middle_grades = expand_output_grades(self.rotor_layout.grades, self.input_layout.grades, algebra.n, op="gp")
+        self.middle_layout = algebra.layout(middle_grades)
+        self.left_product = algebra.plan_product(
+            op="gp",
+            left_layout=self.rotor_layout,
+            right_layout=self.input_layout,
+            output_layout=self.middle_layout,
+            dtype=dtype,
+            device=device,
+        )
+        self.right_product = algebra.plan_product(
+            op="gp",
+            left_layout=self.middle_layout,
+            right_layout=self.rotor_layout,
+            output_layout=self.output_layout,
+            dtype=dtype,
+            device=device,
+        )
 
     def _planned_full_versor_factors(self, weights: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         if self.grade == 2:
@@ -459,86 +540,8 @@ class _VersorFactorPlanMixin:
         return rotor, self.rotor_reverse(rotor)
 
 
-class VersorActionExecutor(_VersorFactorPlanMixin, nn.Module):
+class VersorActionExecutor(_VersorActionExecutor):
     """Apply one planned grade-1 or grade-2 versor action."""
-
-    def __init__(
-        self,
-        algebra,
-        *,
-        grade: int,
-        input_layout: GradeLayout,
-        output_layout: GradeLayout,
-        parameter_layout: GradeLayout,
-        execution_path: str,
-    ):
-        super().__init__()
-        object.__setattr__(self, "algebra", algebra)
-        self.input_contract = resolve_contract(algebra, layout=input_layout, name="input_layout")
-        self.output_contract = resolve_contract(algebra, layout=output_layout, name="output_layout")
-        self.parameter_contract = resolve_contract(algebra, layout=parameter_layout, name="parameter_layout")
-        input_layout = self.input_contract.layout
-        output_layout = self.output_contract.layout
-        parameter_layout = self.parameter_contract.layout
-        self.grade = int(grade)
-        self.input_layout = input_layout
-        self.output_layout = output_layout
-        self.parameter_layout = parameter_layout
-        self.execution_path = str(execution_path)
-        if self.execution_path not in {"vector_matrix", "rotor_product", "full_action_matrix"}:
-            raise ValueError(f"unsupported versor action execution path {self.execution_path!r}")
-        self.use_full_action = self.execution_path == "full_action_matrix"
-        self.use_rotor_product_action = self.execution_path == "rotor_product"
-        self.action = None
-        self.vector_matrix = None
-        self.left_product = None
-        self.right_product = None
-        self.middle_layout = None
-        self.full_action = (
-            FullSandwichActionExecutor.from_layout(
-                input_layout,
-                device=getattr(algebra, "device", None),
-                dtype=getattr(algebra, "dtype", torch.float32),
-            )
-            if self.use_full_action
-            else None
-        )
-        if self.grade not in {1, 2}:
-            raise ValueError("planned versor execution currently supports grade=1 and grade=2")
-        if not self.use_full_action and not self.use_rotor_product_action:
-            self.action = GradedLinearActionExecutor(input_layout=input_layout, output_layout=output_layout)
-            self.vector_matrix = VersorVectorMatrixExecutor(
-                grade=self.grade,
-                parameter_layout=parameter_layout,
-                eps=algebra.eps_sq,
-                dtype=getattr(algebra, "dtype", torch.float32),
-                device=getattr(algebra, "device", None),
-            )
-        self._configure_versor_factor_plans(algebra, grade=self.grade, parameter_layout=parameter_layout)
-        if self.use_rotor_product_action:
-            self._configure_rotor_product_action(algebra)
-
-    def _configure_rotor_product_action(self, algebra) -> None:
-        device = getattr(algebra, "device", None)
-        dtype = getattr(algebra, "dtype", torch.float32)
-        middle_grades = expand_output_grades(self.rotor_layout.grades, self.input_layout.grades, algebra.n, op="gp")
-        self.middle_layout = algebra.layout(middle_grades)
-        self.left_product = algebra.plan_product(
-            op="gp",
-            left_layout=self.rotor_layout,
-            right_layout=self.input_layout,
-            output_layout=self.middle_layout,
-            dtype=dtype,
-            device=device,
-        )
-        self.right_product = algebra.plan_product(
-            op="gp",
-            left_layout=self.middle_layout,
-            right_layout=self.rotor_layout,
-            output_layout=self.output_layout,
-            dtype=dtype,
-            device=device,
-        )
 
     def forward(self, values: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
         """Return transformed values in ``output_layout`` lanes."""
@@ -562,86 +565,10 @@ class VersorActionExecutor(_VersorFactorPlanMixin, nn.Module):
         return self.action.execute(values, matrix)
 
 
-class MultiVersorActionExecutor(_VersorFactorPlanMixin, nn.Module):
+class MultiVersorActionExecutor(_VersorActionExecutor):
     """Apply a weighted superposition of planned grade-1 or grade-2 actions."""
 
-    def __init__(
-        self,
-        algebra,
-        *,
-        grade: int,
-        input_layout: GradeLayout,
-        output_layout: GradeLayout,
-        parameter_layout: GradeLayout,
-        execution_path: str,
-    ):
-        super().__init__()
-        object.__setattr__(self, "algebra", algebra)
-        self.input_contract = resolve_contract(algebra, layout=input_layout, name="input_layout")
-        self.output_contract = resolve_contract(algebra, layout=output_layout, name="output_layout")
-        self.parameter_contract = resolve_contract(algebra, layout=parameter_layout, name="parameter_layout")
-        input_layout = self.input_contract.layout
-        output_layout = self.output_contract.layout
-        parameter_layout = self.parameter_contract.layout
-        self.grade = int(grade)
-        self.input_layout = input_layout
-        self.output_layout = output_layout
-        self.parameter_layout = parameter_layout
-        self.execution_path = str(execution_path)
-        if self.execution_path not in {"vector_matrix", "rotor_product", "full_action_matrix"}:
-            raise ValueError(f"unsupported multi-versor action execution path {self.execution_path!r}")
-        self.use_full_action = self.execution_path == "full_action_matrix"
-        self.use_rotor_product_action = self.execution_path == "rotor_product"
-        self.action = None
-        self.vector_matrix = None
-        self.left_product = None
-        self.right_product = None
-        self.middle_layout = None
-        self.full_action = (
-            FullSandwichActionExecutor.from_layout(
-                input_layout,
-                device=getattr(algebra, "device", None),
-                dtype=getattr(algebra, "dtype", torch.float32),
-            )
-            if self.use_full_action
-            else None
-        )
-        if self.grade not in {1, 2}:
-            raise ValueError("planned multi-versor execution currently supports grade=1 and grade=2")
-        if not self.use_full_action and not self.use_rotor_product_action:
-            self.action = GradedLinearActionExecutor(input_layout=input_layout, output_layout=output_layout)
-            self.vector_matrix = VersorVectorMatrixExecutor(
-                grade=self.grade,
-                parameter_layout=parameter_layout,
-                eps=algebra.eps_sq,
-                dtype=getattr(algebra, "dtype", torch.float32),
-                device=getattr(algebra, "device", None),
-            )
-        self._configure_versor_factor_plans(algebra, grade=self.grade, parameter_layout=parameter_layout)
-        if self.use_rotor_product_action:
-            self._configure_rotor_product_action(algebra)
-
-    def _configure_rotor_product_action(self, algebra) -> None:
-        device = getattr(algebra, "device", None)
-        dtype = getattr(algebra, "dtype", torch.float32)
-        middle_grades = expand_output_grades(self.rotor_layout.grades, self.input_layout.grades, algebra.n, op="gp")
-        self.middle_layout = algebra.layout(middle_grades)
-        self.left_product = algebra.plan_product(
-            op="gp",
-            left_layout=self.rotor_layout,
-            right_layout=self.input_layout,
-            output_layout=self.middle_layout,
-            dtype=dtype,
-            device=device,
-        )
-        self.right_product = algebra.plan_product(
-            op="gp",
-            left_layout=self.middle_layout,
-            right_layout=self.rotor_layout,
-            output_layout=self.output_layout,
-            dtype=dtype,
-            device=device,
-        )
+    action_name = "multi-versor"
 
     def forward(self, values: torch.Tensor, weights: torch.Tensor, mix: torch.Tensor) -> torch.Tensor:
         """Return transformed values in ``output_layout`` lanes."""
