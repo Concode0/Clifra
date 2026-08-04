@@ -1657,9 +1657,10 @@ class BivectorExpExecutor(nn.Module):
         imag: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         radius = torch.sqrt(real * real + imag * imag)
-        large = torch.sqrt(0.5 * (radius + real.abs()))
-        small = imag / (2.0 * large.clamp_min(self.eps))
         nonnegative = real >= 0.0
+        magnitude = torch.where(nonnegative, real, -real)
+        large = torch.sqrt(0.5 * (radius + magnitude))
+        small = imag / (2.0 * large.clamp_min(self.eps))
         u = torch.where(nonnegative, large, small)
         v = torch.where(nonnegative, small, large)
         return u, v, radius
