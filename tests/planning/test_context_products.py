@@ -15,8 +15,6 @@ from tests.planning._grade_plan_helpers import (
     LaneStorage,
     MultiVersorActionHandle,
     PairedBivectorActionHandle,
-    PlanningLimits,
-    ProductExecutionPolicy,
     ProductPlanHandle,
     PseudoscalarProductExecutor,
     SignatureNormSquaredExecutor,
@@ -151,14 +149,17 @@ def test_algebra_plan_product_returns_compact_lane_handle():
     )
 
     assert isinstance(handle, ProductPlanHandle)
-    assert handle.executor is algebra.plan_product(
-        op="gp",
-        left_layout=vector_layout,
-        right_layout=vector_layout,
-        output_layout=output_layout,
-        dtype=torch.float32,
-        device=DEVICE,
-    ).executor
+    assert (
+        handle.executor
+        is algebra.plan_product(
+            op="gp",
+            left_layout=vector_layout,
+            right_layout=vector_layout,
+            output_layout=output_layout,
+            dtype=torch.float32,
+            device=DEVICE,
+        ).executor
+    )
     assert handle.output_layout == output_layout
     assert torch.allclose(handle(left, right), expected, atol=1e-6, rtol=1e-6)
 
@@ -244,7 +245,7 @@ def test_unary_executor_rejects_foreign_request_before_cache_lookup(cache):
     assert tuple(algebra.planner._unary_executors.items()) == cache_before
 
 
-def test_unary_cache_rekey_rejects_foreign_executor():
+def test_module_apply_discards_foreign_cached_executor_without_rekeying():
     algebra = make_algebra(3, 0, 0, device=DEVICE, dtype=torch.float32)
     foreign = make_algebra(4, 0, 0, device=DEVICE, dtype=torch.float32)
     foreign_executor = foreign.plan_unary(
@@ -254,8 +255,9 @@ def test_unary_cache_rekey_rejects_foreign_executor():
     ).executor
     algebra.planner._unary_executors[("foreign",)] = foreign_executor
 
-    with pytest.raises(ValueError, match="input_layout signature .* does not match algebra signature"):
-        algebra._apply(lambda tensor: tensor)
+    algebra._apply(lambda tensor: tensor)
+
+    assert not algebra.planner._unary_executors
 
 
 def test_plan_unary_accepts_layouts_from_equal_signature_algebra():
@@ -551,7 +553,9 @@ def test_planned_signature_norm_squared_matches_small_oracle_for_full_and_compac
     assert isinstance(full_executor, SignatureNormSquaredExecutor)
     assert full_executor.executor_family == "metric_diagonal"
     assert compact_executor.input_layout == bivector_layout
-    assert torch.allclose(context.signature_norm_squared(full), oracle.signature_norm_squared(full), atol=1e-12, rtol=1e-12)
+    assert torch.allclose(
+        context.signature_norm_squared(full), oracle.signature_norm_squared(full), atol=1e-12, rtol=1e-12
+    )
     assert torch.allclose(
         context.signature_norm_squared(compact, input_layout=bivector_layout),
         oracle.signature_norm_squared(compact, bivector_layout.basis_indices),
@@ -580,7 +584,9 @@ def test_planned_pseudoscalar_product_matches_small_oracle_for_full_and_compact_
         dtype=torch.float64,
         device=DEVICE,
     )
-    compact_actual, compact_layout = context.pseudoscalar_product(compact, input_layout=vector_layout, return_layout=True)
+    compact_actual, compact_layout = context.pseudoscalar_product(
+        compact, input_layout=vector_layout, return_layout=True
+    )
     compact_expected = oracle.pseudoscalar_product(
         compact,
         input_indices=vector_layout.basis_indices,
@@ -860,7 +866,10 @@ def test_compact_binary_products_do_not_unwrap_full_tensors():
         (algebra.wedge(bivector, vector, left_layout=bivector_layout, right_layout=vector_layout), (3,)),
         (algebra.symmetric_product(bivector, vector, left_layout=bivector_layout, right_layout=vector_layout), (3,)),
         (algebra.commutator_product(bivector, vector, left_layout=bivector_layout, right_layout=vector_layout), (1,)),
-        (algebra.anti_commutator_product(bivector, vector, left_layout=bivector_layout, right_layout=vector_layout), (3,)),
+        (
+            algebra.anti_commutator_product(bivector, vector, left_layout=bivector_layout, right_layout=vector_layout),
+            (3,),
+        ),
     ]
 
     for values, expected_grades in results:

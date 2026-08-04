@@ -14,8 +14,6 @@ from tests.planning._grade_plan_helpers import (
     LaneStorage,
     MultiVersorActionHandle,
     PairedBivectorActionHandle,
-    PlanningLimits,
-    ProductExecutionPolicy,
     ProductPlanHandle,
     PseudoscalarProductExecutor,
     SignatureNormSquaredExecutor,

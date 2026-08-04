@@ -13,6 +13,15 @@ import torch
 
 from clifra.core.foundation.basis import basis_index_tuple_for_grades
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
+from clifra.core.planning.policy import (
+    DEFAULT_PLANNING_POLICY,
+    PlanCandidate,
+    PlanFacts,
+    PlanningPolicy,
+    RouteDecision,
+    environment_extensions,
+    select_policy_route,
+)
 from clifra.core.runtime.tensors import TensorContract, _check_contract_spec
 
 SPECTRAL_LOCAL_MAX_PLANES = 4
@@ -24,8 +33,8 @@ SPECTRAL_LOCAL_TRUNCATION_NOTICE = (
 
 
 @dataclass(frozen=True)
-class BivectorExpExecutionPolicy:
-    """Public policy knobs for planned bivector exponentials.
+class BivectorExpOptions:
+    """Numerical and approximation options for planned bivector exponentials.
 
     ``spectral_local`` keeps the dominant plane spectrum up to ``spectral_max_planes``.
     Use the diagnostics in this module when evenly distributed rotation energy would make
@@ -33,8 +42,8 @@ class BivectorExpExecutionPolicy:
 
     .. caution::
         Spectral truncation diagnostics (`spectral_exp_angle_diagnostics`) are intended
-        for static design-time evaluation or validation/inference logging. 
-        Avoid extracting scalar values inside compiled 
+        for static design-time evaluation or validation/inference logging.
+        Avoid extracting scalar values inside compiled
         training loops to prevent hardware stream synchronization bottlenecks.
     """
 
@@ -42,12 +51,11 @@ class BivectorExpExecutionPolicy:
     spectral_tol_abs: float | None = None
     spectral_tol_rel: float = 0.0
     spectral_dominant_rel: float | None = None
-    spectral_transition_n: int = 10
     spectral_allow_degenerate: bool = True
     spectral_allow_truncated_degenerate: bool = True
 
 
-DEFAULT_BIVECTOR_EXP_EXECUTION_POLICY = BivectorExpExecutionPolicy()
+DEFAULT_BIVECTOR_EXP_OPTIONS = BivectorExpOptions()
 
 
 @dataclass(frozen=True)
@@ -114,12 +122,14 @@ class BivectorExpPlan:
     spectral_tol_abs: float
     spectral_tol_rel: float
     spectral_dominant_rel: float
-    spectral_transition_n: int
     spectral_allow_degenerate: bool
     spectral_allow_truncated_degenerate: bool
     nondegenerate_dim: int
     ideal_dim: int
     spectral_local_axis_count: int
+    route_facts: PlanFacts
+    route_score: float
+    route_region: str
     eps: float
     eps_sq: float
     input_contract: TensorContract = field(init=False, repr=False)
@@ -203,9 +213,9 @@ def build_bivector_exp_plan(
     spectral_tol_abs: float | None = None,
     spectral_tol_rel: float = 0.0,
     spectral_dominant_rel: float | None = None,
-    spectral_transition_n: int = 10,
     spectral_allow_degenerate: bool = True,
     spectral_allow_truncated_degenerate: bool = True,
+    planning_policy: PlanningPolicy = DEFAULT_PLANNING_POLICY,
 ) -> BivectorExpPlan:
     """Build a static plan for the bivector exponential ``exp(B)`` where ``B`` is grade-2."""
     input_contract = TensorContract.compact(input_layout.spec, input_layout)
@@ -225,11 +235,18 @@ def build_bivector_exp_plan(
         tol_abs=spectral_tol_abs,
         tol_rel=spectral_tol_rel,
         dominant_rel=spectral_dominant_rel,
-        transition_n=spectral_transition_n,
         allow_degenerate=spectral_allow_degenerate,
         allow_truncated_degenerate=spectral_allow_truncated_degenerate,
     )
-    executor_family = _executor_family_from_preselection(spec, preselection, resolved_device)
+    route_decision = select_bivector_exp_route(
+        spec,
+        resolved_device,
+        dtype=dtype,
+        output_layout=output_layout,
+        preselection=preselection,
+        policy=planning_policy,
+    )
+    executor_family = route_decision.route
     buffer_device = torch.device("cpu") if executor_family == "cpu_matrix_exp" else resolved_device
     grade4_layout = spec.layout((4,)) if executor_family == "closed_biquadratic" else None
     operator_layout = spec.layout((0,)) if executor_family == "spectral_local" else spec.layout(range(0, spec.n + 1, 2))
@@ -264,7 +281,9 @@ def build_bivector_exp_plan(
         bivector_to_operator = torch.zeros((0, 0), dtype=dtype, device=buffer_device)
         operator_to_output = torch.zeros((0, 0), dtype=dtype, device=buffer_device)
     else:
-        local_buffers = _empty_spectral_local_buffers(spec, input_layout, output_layout, dtype=dtype, device=buffer_device)
+        local_buffers = _empty_spectral_local_buffers(
+            spec, input_layout, output_layout, dtype=dtype, device=buffer_device
+        )
         spectral_nondegenerate_entries = _empty_generator_entries(dtype=dtype, device=buffer_device)
         spectral_mixed_entries = _empty_generator_entries(dtype=dtype, device=buffer_device)
         bivector_to_nondegenerate_generator = _bivector_to_nondegenerate_generator(
@@ -359,27 +378,17 @@ def build_bivector_exp_plan(
         spectral_tol_abs=preselection.tol_abs,
         spectral_tol_rel=preselection.tol_rel,
         spectral_dominant_rel=preselection.dominant_rel,
-        spectral_transition_n=spectral_transition_n,
         spectral_allow_degenerate=spectral_allow_degenerate,
         spectral_allow_truncated_degenerate=spectral_allow_truncated_degenerate,
         nondegenerate_dim=preselection.nondegenerate_dim,
         ideal_dim=preselection.ideal_dim,
         spectral_local_axis_count=int(local_buffers["axis_count"]),
+        route_facts=route_decision.facts,
+        route_score=route_decision.score,
+        route_region=route_decision.matched_region,
         eps=float(finfo.eps),
         eps_sq=float(finfo.eps**2),
     )
-
-
-def _executor_family_from_preselection(spec: AlgebraSpec, preselection: SpectralExpPreselection, device) -> str:
-    if spec.n <= 3:
-        return "closed_simple"
-    if spec.n <= 5:
-        return "closed_biquadratic"
-    if preselection.eligible:
-        return "spectral_local"
-    if torch.device(device).type == "mps" and preselection.reason.endswith("cpu_matrix_exp"):
-        return "cpu_matrix_exp"
-    return "left_matrix_exp"
 
 
 def _empty_spectral_local_buffers(
@@ -419,6 +428,128 @@ def _empty_spectral_local_buffers(
         "lift_target_positions": torch.zeros((1, 1), dtype=torch.long, device=device),
         "lift_target_mask": torch.zeros((1, 1), dtype=dtype, device=device),
     }
+
+
+def select_bivector_exp_route(
+    spec: AlgebraSpec,
+    device,
+    *,
+    dtype: torch.dtype,
+    output_layout: GradeLayout | None,
+    preselection: SpectralExpPreselection,
+    policy: PlanningPolicy,
+) -> RouteDecision:
+    """Enumerate bivector-exp implementations and apply the injected policy."""
+    device_type = torch.device(device).type
+    dtype_bytes = torch.empty((), dtype=dtype).element_size()
+    even_lanes = 1 if spec.n == 0 else 1 << (spec.n - 1)
+    output_lanes = 1 if output_layout is None else output_layout.dim
+    retained_planes = preselection.max_planes
+    shared = {
+        **environment_extensions(spec, device_type, dtype_bytes),
+        "dtype.epsilon": torch.finfo(dtype).eps,
+        "layout.output_lanes": output_lanes,
+        "exp.even_lanes": even_lanes,
+        "exp.nondegenerate_dim": preselection.nondegenerate_dim,
+        "exp.ideal_dim": preselection.ideal_dim,
+        "exp.retained_planes": retained_planes,
+    }
+
+    def make(
+        route: str,
+        forward: float,
+        backward: float,
+        peak_bytes: int,
+        compile_work: float,
+        reason: str | None,
+        *,
+        requires_transfer: bool = False,
+        exact: bool = True,
+        truncated: bool = False,
+        value_dependent: bool = False,
+    ) -> PlanCandidate:
+        extensions = {
+            **shared,
+            "exp.requires_transfer": requires_transfer,
+            "exp.available_rank": preselection.nondegenerate_dim // 2,
+            "exp.retained_rank": min(retained_planes, preselection.nondegenerate_dim // 2),
+            "exp.rank_deficit": max(preselection.nondegenerate_dim // 2 - retained_planes, 0),
+        }
+        return PlanCandidate(
+            "bivector_exp",
+            route,
+            PlanFacts(
+                forward,
+                backward,
+                peak_bytes,
+                compile_work,
+                exact=exact,
+                truncated=truncated,
+                value_dependent=value_dependent,
+                extensions=extensions,
+            ),
+            reason,
+        )
+
+    closed_simple_reason = None if spec.n <= 3 else "minimal_polynomial_not_simple"
+    closed_biquadratic_reason = None if 4 <= spec.n <= 5 else "biquadratic_domain_requires_n_4_or_5"
+    spectral_reason = None if preselection.eligible else preselection.reason
+    matrix_reason = "matrix_exp_unavailable_on_mps" if device_type == "mps" else None
+    cpu_matrix_reason = (
+        None
+        if device_type == "mps" and preselection.reason == "pseudo_euclidean_mps_cpu_matrix_exp"
+        else "cpu_transfer_route_not_required"
+    )
+    matrix_forward = float(even_lanes) ** 3
+    matrix_peak = even_lanes * even_lanes * dtype_bytes
+    spectral_forward = float(preselection.nondegenerate_dim**3 + max(retained_planes, 1) * output_lanes)
+    spectral_peak = int(
+        dtype_bytes * (preselection.nondegenerate_dim**2 + max(retained_planes, 1) * max(output_lanes, 1))
+    )
+    available_rank = preselection.nondegenerate_dim // 2
+    spectral_truncated = retained_planes < available_rank or (
+        preselection.ideal_dim > 0 and preselection.nondegenerate_dim % 2 != 0
+    )
+    candidates = (
+        make("closed_simple", 8.0, 16.0, dtype_bytes * max(output_lanes, 2), 4.0, closed_simple_reason),
+        make(
+            "closed_biquadratic",
+            32.0,
+            64.0,
+            dtype_bytes * max(output_lanes, 4),
+            12.0,
+            closed_biquadratic_reason,
+        ),
+        make(
+            "spectral_local",
+            spectral_forward,
+            spectral_forward * 2.0,
+            spectral_peak,
+            float(preselection.nondegenerate_dim**2 + retained_planes),
+            spectral_reason,
+            exact=False,
+            truncated=spectral_truncated,
+            value_dependent=True,
+        ),
+        make(
+            "left_matrix_exp",
+            matrix_forward,
+            matrix_forward * 2.0,
+            matrix_peak,
+            float(even_lanes**2),
+            matrix_reason,
+        ),
+        make(
+            "cpu_matrix_exp",
+            matrix_forward,
+            matrix_forward * 2.0,
+            matrix_peak + output_lanes * dtype_bytes,
+            float(even_lanes**2),
+            cpu_matrix_reason,
+            requires_transfer=True,
+        ),
+    )
+    return select_policy_route(policy, candidates)
 
 
 def _spectral_local_buffers(
@@ -468,7 +599,9 @@ def _spectral_local_buffers(
     for output_position, output_index in enumerate(output_layout.basis_indices):
         grade = int(output_index).bit_count()
         if grade % 2 == 0 and grade <= axis_count:
-            output_positions_by_grade.setdefault(grade, []).append((output_position, tuple(_basis_bits(output_index, spec.n))))
+            output_positions_by_grade.setdefault(grade, []).append(
+                (output_position, tuple(_basis_bits(output_index, spec.n)))
+            )
 
     grades = [grade for grade in range(0, axis_count + 1, 2) if grade in output_positions_by_grade]
     if not grades:
@@ -645,7 +778,9 @@ def _sparse_product_buffers(
             lower_right_parity = parity_lookup[torch.bitwise_and(right_indices, (1 << bit) - 1)]
             swap_parity = swap_parity ^ (left_has_bit & lower_right_parity)
         if negative_mask:
-            metric_parity = parity_lookup[torch.bitwise_and(torch.bitwise_and(left_indices, right_indices), negative_mask)]
+            metric_parity = parity_lookup[
+                torch.bitwise_and(torch.bitwise_and(left_indices, right_indices), negative_mask)
+            ]
             swap_parity = swap_parity ^ metric_parity
 
         left_positions = torch.arange(start, stop, dtype=torch.long).view(-1, 1).expand(-1, dim)
@@ -653,7 +788,9 @@ def _sparse_product_buffers(
         left_position_chunks.append(left_positions[valid])
         right_position_chunks.append(right_positions[valid])
         output_position_chunks.append(lookup[outputs][valid])
-        coefficient_chunks.append(torch.where(swap_parity[valid], -torch.ones((), dtype=dtype), torch.ones((), dtype=dtype)))
+        coefficient_chunks.append(
+            torch.where(swap_parity[valid], -torch.ones((), dtype=dtype), torch.ones((), dtype=dtype))
+        )
 
     left_positions = torch.cat(left_position_chunks) if left_position_chunks else torch.zeros(0, dtype=torch.long)
     right_positions = torch.cat(right_position_chunks) if right_position_chunks else torch.zeros(0, dtype=torch.long)
@@ -883,7 +1020,7 @@ def _layout_map(source: GradeLayout | None, target: GradeLayout, *, dtype: torch
     for source_position, index in enumerate(source.basis_indices):
         target_position = target_positions.get(index)
         if target_position is not None:
-                matrix[source_position, target_position] = 1.0
+            matrix[source_position, target_position] = 1.0
     return matrix
 
 
@@ -1081,7 +1218,6 @@ def spectral_exp_preselection(
     tol_abs: float | None = None,
     tol_rel: float = 0.0,
     dominant_rel: float | None = None,
-    transition_n: int = 10,
     allow_degenerate: bool = True,
     allow_truncated_degenerate: bool = True,
 ) -> SpectralExpPreselection:
@@ -1090,9 +1226,6 @@ def spectral_exp_preselection(
     full_rank_planes = nondegenerate_dim // 2
     if max_planes is not None and int(max_planes) <= 0:
         raise ValueError(f"max_planes must be positive, got {max_planes}")
-    resolved_transition_n = int(transition_n)
-    if resolved_transition_n <= 0:
-        raise ValueError(f"transition_n must be positive, got {transition_n}")
     resolved_max_planes = (
         min(full_rank_planes, SPECTRAL_LOCAL_MAX_PLANES)
         if max_planes is None
@@ -1103,24 +1236,16 @@ def spectral_exp_preselection(
     resolved_tol_abs = torch.finfo(dtype).eps * 32.0 if tol_abs is None else float(tol_abs)
     if resolved_tol_abs < 0.0:
         raise ValueError(f"tol_abs must be non-negative, got {tol_abs}")
-    resolved_dominant_rel = max(torch.finfo(dtype).eps**0.5, torch.finfo(dtype).eps * 32.0) if dominant_rel is None else float(dominant_rel)
+    resolved_dominant_rel = (
+        max(torch.finfo(dtype).eps ** 0.5, torch.finfo(dtype).eps * 32.0)
+        if dominant_rel is None
+        else float(dominant_rel)
+    )
     if resolved_dominant_rel < 0.0:
         raise ValueError(f"dominant_rel must be non-negative, got {dominant_rel}")
 
     device_type = torch.device(device).type
     solver_family = "symmetric" if spec.p == 0 or spec.q == 0 else "general_complex"
-    if spec.n <= 5:
-        return SpectralExpPreselection(
-            False,
-            "closed_formula_preferred",
-            resolved_max_planes,
-            resolved_tol_abs,
-            float(tol_rel),
-            resolved_dominant_rel,
-            nondegenerate_dim,
-            spec.r,
-            solver_family,
-        )
     if spec.p > 0 and spec.q > 0:
         reason = "pseudo_euclidean_mps_cpu_matrix_exp" if device_type == "mps" else "pseudo_euclidean_matrix_exp"
         return SpectralExpPreselection(
@@ -1194,18 +1319,6 @@ def spectral_exp_preselection(
             spec.r,
             solver_family,
         )
-    if device_type != "mps" and spec.n < resolved_transition_n:
-        return SpectralExpPreselection(
-            False,
-            "matrix_exp_below_spectral_transition",
-            resolved_max_planes,
-            resolved_tol_abs,
-            float(tol_rel),
-            resolved_dominant_rel,
-            nondegenerate_dim,
-            spec.r,
-            solver_family,
-        )
     if nondegenerate_dim < 2:
         return SpectralExpPreselection(
             False,
@@ -1240,9 +1353,10 @@ def select_bivector_exp_executor_family(
     spectral_tol_abs: float | None = None,
     spectral_tol_rel: float = 0.0,
     spectral_dominant_rel: float | None = None,
-    spectral_transition_n: int = 10,
     spectral_allow_degenerate: bool = True,
     spectral_allow_truncated_degenerate: bool = True,
+    output_layout: GradeLayout | None = None,
+    planning_policy: PlanningPolicy = DEFAULT_PLANNING_POLICY,
 ) -> str:
     """Return the planner-selected bivector-exp executor family."""
     spectral = spectral_exp_preselection(
@@ -1253,8 +1367,14 @@ def select_bivector_exp_executor_family(
         tol_abs=spectral_tol_abs,
         tol_rel=spectral_tol_rel,
         dominant_rel=spectral_dominant_rel,
-        transition_n=spectral_transition_n,
         allow_degenerate=spectral_allow_degenerate,
         allow_truncated_degenerate=spectral_allow_truncated_degenerate,
     )
-    return _executor_family_from_preselection(spec, spectral, device)
+    return select_bivector_exp_route(
+        spec,
+        device,
+        dtype=dtype,
+        output_layout=output_layout,
+        preselection=spectral,
+        policy=planning_policy,
+    ).route

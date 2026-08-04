@@ -51,9 +51,9 @@ from .foundation.module import AlgebraLike, CliffordModule
 from .foundation.numerics import covariance_regularizer, eps_for, eps_like, signed_clamp_min
 from .foundation.validation import check_channels, check_multivector
 from .planning.exp import (
-    DEFAULT_BIVECTOR_EXP_EXECUTION_POLICY,
+    DEFAULT_BIVECTOR_EXP_OPTIONS,
     SPECTRAL_LOCAL_TRUNCATION_NOTICE,
-    BivectorExpExecutionPolicy,
+    BivectorExpOptions,
     BivectorExpPlan,
     SpectralExpAngleDiagnostics,
     SpectralExpPreselection,
@@ -72,13 +72,27 @@ from .planning.metric import (
 )
 from .planning.permutation import PseudoscalarProductPlan, build_pseudoscalar_product_plan
 from .planning.planner import GradePlanner
-from .planning.policy import DEFAULT_PLANNING_LIMITS, PlanCost, PlanningLimits
+from .planning.policy import (
+    DEFAULT_PLANNING_POLICY,
+    BoundaryRegion,
+    FormulaConstraint,
+    FormulaPolicy,
+    PlanCandidate,
+    PlanFacts,
+    PlanningPolicy,
+    PolicyCoverageError,
+    PolicyEvaluation,
+    Polynomial,
+    PolynomialTerm,
+    RouteRule,
+)
 from .planning.product import (
     FullTableProductPlan,
     GradeProductPlan,
     build_full_table_product_plan,
     build_grade_product_plan,
 )
+from .planning.resources import ResourceLimits
 from .planning.tree import GradePathNode, GradePlanTree, build_grade_plan_tree
 from .planning.unary import GradeUnaryOp, GradeUnaryPlan, UnaryRequest, build_unary_request
 from .runtime.algebra import AlgebraContext
@@ -143,15 +157,25 @@ __all__ = [
     "TensorContract",
     "BivectorExpExecutor",
     "BivectorExpPlan",
-    "BivectorExpExecutionPolicy",
-    "DEFAULT_BIVECTOR_EXP_EXECUTION_POLICY",
+    "BivectorExpOptions",
+    "DEFAULT_BIVECTOR_EXP_OPTIONS",
     "SPECTRAL_LOCAL_TRUNCATION_NOTICE",
     "SpectralExpAngleDiagnostics",
     "SpectralExpPreselection",
     "SpectralExpUniformTailStress",
-    "PlanningLimits",
-    "PlanCost",
-    "DEFAULT_PLANNING_LIMITS",
+    "ResourceLimits",
+    "PlanningPolicy",
+    "FormulaPolicy",
+    "PlanCandidate",
+    "PlanFacts",
+    "PolicyEvaluation",
+    "PolynomialTerm",
+    "Polynomial",
+    "FormulaConstraint",
+    "BoundaryRegion",
+    "RouteRule",
+    "PolicyCoverageError",
+    "DEFAULT_PLANNING_POLICY",
     "make_algebra",
     "make_algebra_from_config",
     # device / validation

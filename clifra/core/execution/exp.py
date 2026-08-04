@@ -32,7 +32,9 @@ def _filtered_symmetric_eigh_setup_context(ctx, inputs, output) -> None:
 
 def _filtered_symmetric_eigh_backward(ctx, grad_eigenvalues: Tensor, grad_eigenvectors: Tensor):
     eigenvalues, eigenvectors, tolerances = ctx.saved_tensors
-    return _filtered_symmetric_eigh_backward_impl(eigenvalues, eigenvectors, tolerances, grad_eigenvalues, grad_eigenvectors), None
+    return _filtered_symmetric_eigh_backward_impl(
+        eigenvalues, eigenvectors, tolerances, grad_eigenvalues, grad_eigenvectors
+    ), None
 
 
 def _filtered_symmetric_eigh_backward_impl(
@@ -390,7 +392,9 @@ def _spectral_local_one_shot_plane_basis_impl(
     generated_y_raw = torch.einsum("...mn,...kn->...km", generator, basis_x) / safe_theta.unsqueeze(-1)
     generated_y_raw = generated_y_raw - (generated_y_raw * basis_x).sum(dim=-1, keepdim=True) * basis_x
     generated_y_norm = generated_y_raw.norm(dim=-1, keepdim=True)
-    generated_y = generated_y_raw / torch.where(generated_y_norm > eps, generated_y_norm, torch.ones_like(generated_y_norm))
+    generated_y = generated_y_raw / torch.where(
+        generated_y_norm > eps, generated_y_norm, torch.ones_like(generated_y_norm)
+    )
 
     if fallback_y:
         fallback_slots = plane_slots + 1
@@ -409,12 +413,7 @@ def _spectral_local_one_shot_plane_basis_impl(
         basis_y = generated_y
         y_norm = generated_y_norm
 
-    active = (
-        (tail > tolerance)
-        & (theta > dominant_tolerance)
-        & (x_norm.squeeze(-1) > eps)
-        & (y_norm.squeeze(-1) > eps)
-    )
+    active = (tail > tolerance) & (theta > dominant_tolerance) & (x_norm.squeeze(-1) > eps) & (y_norm.squeeze(-1) > eps)
     return theta, basis_x, basis_y, active.to(generator.dtype)
 
 
@@ -490,10 +489,7 @@ def _spectral_local_nondegenerate_projector_impl(
         y_norm = basis_y_raw.norm(dim=-1, keepdim=True)
         basis_y = basis_y_raw / torch.where(y_norm > eps, y_norm, torch.ones_like(y_norm))
         active = (
-            (tail[..., plane : plane + 1] > tolerance)
-            & (theta > dominant_tolerance)
-            & (x_norm > eps)
-            & (y_norm > eps)
+            (tail[..., plane : plane + 1] > tolerance) & (theta > dominant_tolerance) & (x_norm > eps) & (y_norm > eps)
         )
         active = active.to(generator.dtype)
 
@@ -771,8 +767,7 @@ def _spectral_local_degenerate_projector_impl(
         safe_theta = torch.where(theta > eps, theta, torch.ones_like(theta))
         basis_y_from_generator_raw = (generator @ basis_x.unsqueeze(-1)).squeeze(-1) / safe_theta
         basis_y_from_generator_raw = (
-            basis_y_from_generator_raw
-            - (basis_y_from_generator_raw * basis_x).sum(dim=-1, keepdim=True) * basis_x
+            basis_y_from_generator_raw - (basis_y_from_generator_raw * basis_x).sum(dim=-1, keepdim=True) * basis_x
         )
         y_generator_norm = basis_y_from_generator_raw.norm(dim=-1, keepdim=True)
         basis_y_from_generator = basis_y_from_generator_raw / torch.where(
@@ -798,10 +793,7 @@ def _spectral_local_degenerate_projector_impl(
         y_norm = torch.where(use_generator_y, y_generator_norm, y_fallback_norm)
 
         rotation_active = (
-            (tail[..., plane : plane + 1] > tolerance)
-            & (theta > dominant_tolerance)
-            & (x_norm > eps)
-            & (y_norm > eps)
+            (tail[..., plane : plane + 1] > tolerance) & (theta > dominant_tolerance) & (x_norm > eps) & (y_norm > eps)
         )
         theta = torch.where(rotation_active, theta, torch.zeros_like(theta))
         cx = (mixed @ basis_x.unsqueeze(-1)).squeeze(-1)
@@ -947,7 +939,9 @@ def _spectral_local_degenerate_plane_factor_impl(
     )
 
 
-def _spectral_local_nilpotent_coefficients_impl(theta: Tensor, sinc: Tensor, cos_theta: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+def _spectral_local_nilpotent_coefficients_impl(
+    theta: Tensor, sinc: Tensor, cos_theta: Tensor
+) -> tuple[Tensor, Tensor, Tensor]:
     theta_sq = theta * theta
     theta_fourth = theta_sq * theta_sq
     theta_sixth = theta_fourth * theta_sq
@@ -1297,7 +1291,6 @@ class BivectorExpExecutor(nn.Module):
         self.spectral_tol_abs = float(plan.spectral_tol_abs)
         self.spectral_tol_rel = float(plan.spectral_tol_rel)
         self.spectral_dominant_rel = float(plan.spectral_dominant_rel)
-        self.spectral_transition_n = int(plan.spectral_transition_n)
         self.spectral_allow_degenerate = plan.spectral_allow_degenerate
         self.spectral_allow_truncated_degenerate = plan.spectral_allow_truncated_degenerate
         self.nondegenerate_dim = int(plan.nondegenerate_dim)
@@ -1309,8 +1302,12 @@ class BivectorExpExecutor(nn.Module):
         self.bivector_grade4_product = bivector_grade4_product
         self.register_buffer("metric_signs", plan.metric_signs, persistent=False)
         self.register_buffer("bivector_squared_signs", plan.bivector_squared_signs, persistent=False)
-        self.register_buffer("nondegenerate_bivector_positions", plan.nondegenerate_bivector_positions, persistent=False)
-        self.register_buffer("mixed_degenerate_bivector_positions", plan.mixed_degenerate_bivector_positions, persistent=False)
+        self.register_buffer(
+            "nondegenerate_bivector_positions", plan.nondegenerate_bivector_positions, persistent=False
+        )
+        self.register_buffer(
+            "mixed_degenerate_bivector_positions", plan.mixed_degenerate_bivector_positions, persistent=False
+        )
         self.register_buffer("nilpotent_bivector_positions", plan.nilpotent_bivector_positions, persistent=False)
         self.register_buffer(
             "bivector_to_nondegenerate_generator",
@@ -1343,7 +1340,9 @@ class BivectorExpExecutor(nn.Module):
             plan.spectral_local_sparse_output_positions,
             persistent=False,
         )
-        self.register_buffer("spectral_local_sparse_coefficients", plan.spectral_local_sparse_coefficients, persistent=False)
+        self.register_buffer(
+            "spectral_local_sparse_coefficients", plan.spectral_local_sparse_coefficients, persistent=False
+        )
         self.register_buffer(
             "spectral_nondegenerate_generator_input_positions",
             plan.spectral_nondegenerate_generator_input_positions,
@@ -1391,8 +1390,12 @@ class BivectorExpExecutor(nn.Module):
         self.register_buffer("spectral_plane_output_positions", plan.spectral_plane_output_positions, persistent=False)
         self.register_buffer("spectral_plane_coefficients", plan.spectral_plane_coefficients, persistent=False)
         self.register_buffer("spectral_plane_to_local", plan.spectral_plane_to_local, persistent=False)
-        self.register_buffer("spectral_nilpotent_input_positions", plan.spectral_nilpotent_input_positions, persistent=False)
-        self.register_buffer("spectral_nilpotent_local_positions", plan.spectral_nilpotent_local_positions, persistent=False)
+        self.register_buffer(
+            "spectral_nilpotent_input_positions", plan.spectral_nilpotent_input_positions, persistent=False
+        )
+        self.register_buffer(
+            "spectral_nilpotent_local_positions", plan.spectral_nilpotent_local_positions, persistent=False
+        )
         self.register_buffer("spectral_ideal_basis", plan.spectral_ideal_basis, persistent=False)
         self.spectral_lift_grade_values = plan.spectral_lift_grade_values
         self.register_buffer("spectral_lift_grades", plan.spectral_lift_grades, persistent=False)
@@ -1612,12 +1615,7 @@ class BivectorExpExecutor(nn.Module):
         safe_values = torch.where(active, values, torch.ones_like(values))
         raw = (cosh_sqrt - sinhc_sqrt) / (2.0 * safe_values)
         values_sq = values * values
-        series = (
-            1.0 / 6.0
-            + values / 60.0
-            + values_sq / 1680.0
-            + (values_sq * values) / 90720.0
-        )
+        series = 1.0 / 6.0 + values / 60.0 + values_sq / 1680.0 + (values_sq * values) / 90720.0
         return torch.where(active, raw, series)
 
     def _real_coalescing_corrections(
@@ -1629,10 +1627,7 @@ class BivectorExpExecutor(nn.Module):
         active = values.abs() > self.sinhc_derivative_series_limit
         safe_values = torch.where(active, values, torch.ones_like(values))
         cosh_raw = (sinhc_sqrt - 6.0 * derivative) / (48.0 * safe_values)
-        sinhc_raw = (
-            ((4.0 * safe_values + 60.0) * derivative - 10.0 * sinhc_sqrt)
-            / (96.0 * safe_values * safe_values)
-        )
+        sinhc_raw = ((4.0 * safe_values + 60.0) * derivative - 10.0 * sinhc_sqrt) / (96.0 * safe_values * safe_values)
         values_sq = values * values
         cosh_series = 1.0 / 720.0 + values / 10080.0 + values_sq / 362880.0
         sinhc_series = 1.0 / 5040.0 + values / 90720.0 + values_sq / 3991680.0

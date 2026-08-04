@@ -16,7 +16,6 @@ from clifra.core.runtime.tensors import LaneStorage
 from .policy import (
     AnalysisFeasibility,
     MatrixAnalysisCost,
-    analysis_cost_policy_for,
     build_product_analysis_cost,
     evaluate_matrix_cost,
     evaluate_product_cost,
@@ -66,7 +65,6 @@ def matrix_feasibility(
     max_entries: int,
     matrix_kind: str,
     dtype: torch.dtype = torch.float32,
-    policy=None,
 ) -> AnalysisFeasibility:
     """Check whether an explicit square matrix is within analysis policy."""
     return evaluate_matrix_cost(
@@ -76,7 +74,6 @@ def matrix_feasibility(
             matrix_dim=int(matrix_dim),
             max_entries=int(max_entries),
             dtype=dtype,
-            policy=policy if policy is not None else analysis_cost_policy_for(None),
         )
     )
 
@@ -96,7 +93,6 @@ def full_matrix_feasibility(
         max_entries=max_entries,
         matrix_kind=matrix_kind,
         dtype=getattr(algebra, "dtype", torch.float32),
-        policy=analysis_cost_policy_for(algebra),
     )
     details = dict(verdict.details)
     details.update({"n": layout.spec.n, "full_lanes": layout.dim})
@@ -125,7 +121,6 @@ def product_feasibility(
             max_pairs=max_pairs,
             dtype=getattr(algebra, "dtype", torch.float32),
             device=getattr(algebra, "device", "cpu"),
-            policy=analysis_cost_policy_for(algebra),
         )
     except ValueError as exc:
         details = {

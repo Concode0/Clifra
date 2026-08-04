@@ -1,12 +1,11 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
-"""Static analysis policy.
+"""Static analysis budgets over compositions of core operation estimates.
 
-Analysis routines sometimes need optional full-lane matrices or broad products
-that are not part of normal model forward paths. This module keeps those
-decisions equation-based and separate from benchmark observations while using
-the same static metadata style as planner policy.
+Analysis is deliberately not a planning-policy family.  Optional reports
+describe the core operations they compose and apply analysis-local budgets to
+those estimates.
 """
 
 from __future__ import annotations
@@ -17,78 +16,86 @@ from typing import Mapping, Optional
 import torch
 
 from clifra.core.foundation.layout import GradeLayout
-from clifra.core.planning.policy import estimate_product_executor_cost
+from clifra.core.planning.policy import PlanFacts, compose_plan_facts
+from clifra.core.planning.product import estimate_product_executor_cost
 
 
 @dataclass(frozen=True)
-class AnalysisCostPolicy:
-    """Equation weights for optional analysis materialization decisions."""
+class AnalysisBudget:
+    """Independent upper bounds for an optional analysis composition."""
 
-    matrix_entry_weight: float = 1.0
-    matrix_memory_weight: float = 0.0
-    product_pair_weight: float = 1.0
-    product_path_weight: float = 0.0
-    product_output_weight: float = 0.0
-    product_memory_weight: float = 0.0
-    memory_cost_unit_bytes: int = 4096
+    max_forward_work: float = float("inf")
+    max_backward_work: float = float("inf")
+    max_peak_bytes: int = (1 << 63) - 1
+    max_compile_work: float = float("inf")
+
+
+@dataclass(frozen=True)
+class AnalysisComponent:
+    """One core operation or analysis-local kernel in a report composition."""
+
+    family: str
+    route: str
+    facts: PlanFacts
+
+
+@dataclass(frozen=True)
+class AnalysisComposition:
+    """Static composable work description for one optional report."""
+
+    components: tuple[AnalysisComponent, ...]
+
+    @property
+    def facts(self) -> PlanFacts:
+        # Owners must pass an explicit peak when component lifetimes overlap.
+        return compose_plan_facts(*(component.facts for component in self.components))
 
 
 @dataclass(frozen=True)
 class AnalysisFeasibility:
-    """Static cost verdict for optional analysis materialization."""
+    """Static budget verdict for optional analysis materialization."""
 
     supported: bool
     reason: str
     details: Mapping[str, object]
 
     def __bool__(self) -> bool:
-        """Allow direct use in guards."""
         return self.supported
 
 
 @dataclass(frozen=True)
 class MatrixAnalysisCost:
-    """Static cost summary for an explicit analysis matrix."""
+    """Analysis-local explicit matrix component."""
 
     role: str
     matrix_kind: str
     matrix_dim: int
     max_entries: int
     dtype: torch.dtype
-    policy: AnalysisCostPolicy = AnalysisCostPolicy()
 
     @property
     def matrix_entries(self) -> int:
-        """Return square matrix element count."""
         return self.matrix_dim * self.matrix_dim
 
     @property
     def estimated_bytes(self) -> int:
-        """Return estimated matrix storage bytes."""
         return self.matrix_entries * _dtype_bytes(self.dtype)
 
     @property
-    def score(self) -> float:
-        """Return the weighted analysis score."""
-        return _analysis_score(
-            units=self.matrix_entries,
-            paths=0,
-            output_lanes=self.matrix_dim,
-            estimated_bytes=self.estimated_bytes,
-            unit_weight=self.policy.matrix_entry_weight,
-            path_weight=0.0,
-            output_weight=0.0,
-            memory_weight=self.policy.matrix_memory_weight,
-            memory_cost_unit_bytes=self.policy.memory_cost_unit_bytes,
+    def composition(self) -> AnalysisComposition:
+        work = float(self.matrix_entries)
+        return AnalysisComposition(
+            (
+                AnalysisComponent(
+                    "analysis_local",
+                    f"{self.matrix_kind}_matrix",
+                    PlanFacts(work, 0.0, self.estimated_bytes, work),
+                ),
+            )
         )
 
-    @property
-    def limit_score(self) -> float:
-        """Return the weighted score limit."""
-        return float(self.max_entries) * float(self.policy.matrix_entry_weight)
-
     def details(self) -> dict[str, object]:
-        """Return JSON-like metadata for diagnostics."""
+        facts = self.composition.facts
         return {
             "role": self.role,
             "matrix_kind": self.matrix_kind,
@@ -96,15 +103,16 @@ class MatrixAnalysisCost:
             "matrix_entries": self.matrix_entries,
             "max_entries": self.max_entries,
             "estimated_bytes": self.estimated_bytes,
-            "analysis_score": self.score,
-            "analysis_limit_score": self.limit_score,
+            "forward_work": facts.forward_work,
+            "peak_bytes": facts.peak_bytes,
+            "components": (f"analysis_local:{self.matrix_kind}_matrix",),
             "dtype": str(self.dtype).removeprefix("torch."),
         }
 
 
 @dataclass(frozen=True)
 class ProductAnalysisCost:
-    """Static cost summary for an optional analysis product."""
+    """Core product component used by an optional analysis report."""
 
     role: str
     op: str
@@ -119,30 +127,10 @@ class ProductAnalysisCost:
     path_count: int
     backend: str
     dtype: torch.dtype
-    policy: AnalysisCostPolicy = AnalysisCostPolicy()
-
-    @property
-    def score(self) -> float:
-        """Return the weighted analysis score."""
-        return _analysis_score(
-            units=self.pair_count,
-            paths=self.path_count,
-            output_lanes=self.output_layout.dim,
-            estimated_bytes=self.estimated_bytes,
-            unit_weight=self.policy.product_pair_weight,
-            path_weight=self.policy.product_path_weight,
-            output_weight=self.policy.product_output_weight,
-            memory_weight=self.policy.product_memory_weight,
-            memory_cost_unit_bytes=self.policy.memory_cost_unit_bytes,
-        )
-
-    @property
-    def limit_score(self) -> float:
-        """Return the weighted score limit."""
-        return float(self.max_pairs) * float(self.policy.product_pair_weight)
+    composition: AnalysisComposition
 
     def details(self) -> dict[str, object]:
-        """Return JSON-like metadata for diagnostics."""
+        facts = self.composition.facts
         return {
             "role": self.role,
             "op": self.op,
@@ -160,35 +148,46 @@ class ProductAnalysisCost:
             "executor_family": self.executor_family,
             "backend": self.backend,
             "estimated_bytes": self.estimated_bytes,
-            "analysis_score": self.score,
-            "analysis_limit_score": self.limit_score,
+            "forward_work": facts.forward_work,
+            "backward_work": facts.backward_work,
+            "peak_bytes": facts.peak_bytes,
+            "compile_work": facts.compile_work,
+            "components": (f"product:{self.executor_family}",),
             "dtype": str(self.dtype).removeprefix("torch."),
         }
 
 
-DEFAULT_ANALYSIS_COST_POLICY = AnalysisCostPolicy()
-
-
 def feasibility_record(feasibility: AnalysisFeasibility) -> dict[str, object]:
-    """Return JSON-like metadata for a feasibility verdict."""
-    return {
-        "reason": feasibility.reason,
-        "details": dict(feasibility.details),
-    }
+    return {"reason": feasibility.reason, "details": dict(feasibility.details)}
 
 
-def analysis_cost_policy_for(algebra, policy: Optional[AnalysisCostPolicy] = None) -> AnalysisCostPolicy:
-    """Return an analysis cost policy for an algebra-like object."""
-    if policy is not None:
-        return policy
-    return getattr(algebra, "analysis_cost_policy", DEFAULT_ANALYSIS_COST_POLICY)
+def evaluate_composition(
+    composition: AnalysisComposition,
+    budget: AnalysisBudget,
+    *,
+    reason: str = "analysis_budget",
+    details: Optional[Mapping[str, object]] = None,
+) -> AnalysisFeasibility:
+    facts = composition.facts
+    violations = {}
+    if facts.forward_work > budget.max_forward_work:
+        violations["forward_work"] = (facts.forward_work, budget.max_forward_work)
+    if facts.backward_work > budget.max_backward_work:
+        violations["backward_work"] = (facts.backward_work, budget.max_backward_work)
+    if facts.peak_bytes > budget.max_peak_bytes:
+        violations["peak_bytes"] = (facts.peak_bytes, budget.max_peak_bytes)
+    if facts.compile_work > budget.max_compile_work:
+        violations["compile_work"] = (facts.compile_work, budget.max_compile_work)
+    payload = dict(details or {})
+    payload["violations"] = violations
+    return AnalysisFeasibility(not violations, "ok" if not violations else reason, payload)
 
 
 def evaluate_matrix_cost(cost: MatrixAnalysisCost) -> AnalysisFeasibility:
-    """Return a feasibility verdict for a matrix cost."""
-    if cost.score > cost.limit_score:
-        return AnalysisFeasibility(False, f"{cost.matrix_kind}_matrix_cap", cost.details())
-    return AnalysisFeasibility(True, "ok", cost.details())
+    details = cost.details()
+    if cost.matrix_entries > cost.max_entries:
+        return AnalysisFeasibility(False, f"{cost.matrix_kind}_matrix_cap", details)
+    return AnalysisFeasibility(True, "ok", details)
 
 
 def build_product_analysis_cost(
@@ -202,10 +201,8 @@ def build_product_analysis_cost(
     max_pairs: int,
     dtype: Optional[torch.dtype] = None,
     device=None,
-    policy: Optional[AnalysisCostPolicy] = None,
 ) -> ProductAnalysisCost:
-    """Build static product cost metadata using planner policy estimates."""
-    resolved_policy = analysis_cost_policy_for(algebra, policy)
+    """Map an analysis product to the selected core product route estimate."""
     resolved_dtype = getattr(algebra, "dtype", torch.float32) if dtype is None else dtype
     resolved_device = getattr(algebra, "device", "cpu") if device is None else device
     executor_cost = estimate_product_executor_cost(
@@ -217,12 +214,9 @@ def build_product_analysis_cost(
         dtype=resolved_dtype,
         device=resolved_device,
     )
-    if executor_cost.executor_family == "full_table":
-        pair_count = executor_cost.full_table_pair_count
-        estimated_bytes = executor_cost.full_table_estimated_bytes
-    else:
-        pair_count = executor_cost.sparse_estimated_pairs
-        estimated_bytes = executor_cost.sparse_estimated_bytes
+    composition = AnalysisComposition(
+        (AnalysisComponent("product", executor_cost.decision.route, executor_cost.decision.facts),)
+    )
     return ProductAnalysisCost(
         role=str(role),
         op=str(op),
@@ -230,43 +224,22 @@ def build_product_analysis_cost(
         right_layout=right_layout,
         output_layout=output_layout,
         max_pairs=int(max_pairs),
-        executor_family=executor_cost.executor_family,
-        pair_count=int(pair_count),
+        executor_family=executor_cost.decision.route,
+        pair_count=int(executor_cost.pair_count),
         estimated_pairs=int(left_layout.dim) * int(right_layout.dim),
-        estimated_bytes=int(estimated_bytes),
+        estimated_bytes=int(executor_cost.decision.facts.peak_bytes),
         path_count=int(executor_cost.path_count),
         backend=executor_cost.backend,
         dtype=resolved_dtype,
-        policy=resolved_policy,
+        composition=composition,
     )
 
 
 def evaluate_product_cost(cost: ProductAnalysisCost) -> AnalysisFeasibility:
-    """Return a feasibility verdict for a product cost."""
-    if cost.score > cost.limit_score:
-        return AnalysisFeasibility(False, "product_pair_cap", cost.details())
-    return AnalysisFeasibility(True, "ok", cost.details())
-
-
-def _analysis_score(
-    *,
-    units: int,
-    paths: int,
-    output_lanes: int,
-    estimated_bytes: int,
-    unit_weight: float,
-    path_weight: float,
-    output_weight: float,
-    memory_weight: float,
-    memory_cost_unit_bytes: int,
-) -> float:
-    memory_units = int(estimated_bytes) / max(int(memory_cost_unit_bytes), 1)
-    return (
-        float(units) * float(unit_weight)
-        + float(paths) * float(path_weight)
-        + float(output_lanes) * float(output_weight)
-        + float(memory_units) * float(memory_weight)
-    )
+    details = cost.details()
+    if cost.pair_count > cost.max_pairs:
+        return AnalysisFeasibility(False, "product_pair_cap", details)
+    return AnalysisFeasibility(True, "ok", details)
 
 
 def _dtype_bytes(dtype: torch.dtype) -> int:

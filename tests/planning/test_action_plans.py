@@ -14,8 +14,6 @@ from tests.planning._grade_plan_helpers import (
     LaneStorage,
     MultiVersorActionHandle,
     PairedBivectorActionHandle,
-    PlanningLimits,
-    ProductExecutionPolicy,
     ProductPlanHandle,
     PseudoscalarProductExecutor,
     SignatureNormSquaredExecutor,
@@ -48,6 +46,28 @@ from tests.planning._grade_plan_helpers import (
 )
 
 pytestmark = pytest.mark.unit
+
+
+def test_policy_selected_action_plans_are_cached_by_static_contract():
+    algebra = AlgebraContext(4, 0, 0, device=DEVICE, dtype=torch.float32)
+    vector_layout = algebra.layout((1,))
+    bivector_layout = algebra.layout((2,))
+
+    first = algebra.planner.versor_action_plan(
+        grade=2,
+        input_layout=vector_layout,
+        output_layout=vector_layout,
+        parameter_layout=bivector_layout,
+    )
+    second = algebra.planner.versor_action_plan(
+        grade=2,
+        input_layout=vector_layout,
+        output_layout=vector_layout,
+        parameter_layout=bivector_layout,
+    )
+
+    assert second is first
+    assert len(algebra.planner._versor_action_plans) == 1
 
 
 @pytest.mark.parametrize("route", ["plan_versor_action", "plan_multi_versor_action", "plan_paired_bivector_action"])

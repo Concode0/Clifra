@@ -25,8 +25,9 @@ class AlgebraLike(Protocol):
     eps: float
     eps_sq: float
     planner: object
-    planning_limits: object
-    product_execution_policy: object
+    planning_policy: object
+    resource_limits: object
+    bivector_exp_options: object
 
     @property
     def device(self):
@@ -199,7 +200,9 @@ class AlgebraLike(Protocol):
         """Return full-layout sandwich action matrices."""
         ...
 
-    def sandwich_product(self, left: torch.Tensor, values: torch.Tensor, right: torch.Tensor = None, **kwargs) -> torch.Tensor:
+    def sandwich_product(
+        self, left: torch.Tensor, values: torch.Tensor, right: torch.Tensor = None, **kwargs
+    ) -> torch.Tensor:
         """Apply one full-layout sandwich action per leading batch item."""
         ...
 

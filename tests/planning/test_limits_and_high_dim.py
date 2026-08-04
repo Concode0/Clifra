@@ -14,10 +14,9 @@ from tests.planning._grade_plan_helpers import (
     LaneStorage,
     MultiVersorActionHandle,
     PairedBivectorActionHandle,
-    PlanningLimits,
-    ProductExecutionPolicy,
     ProductPlanHandle,
     PseudoscalarProductExecutor,
+    ResourceLimits,
     SignatureNormSquaredExecutor,
     SmallCliffordOracle,
     UnaryPlanHandle,
@@ -51,8 +50,8 @@ pytestmark = pytest.mark.unit
 
 
 def test_context_static_product_cost_limits_raise_before_executor_build():
-    limits = PlanningLimits(warn_lanes=512, max_lanes=512, warn_pairs=512, max_pairs=64)
-    algebra = make_algebra(10, 4, 2, device=DEVICE, dtype=torch.float32, planning_limits=limits)
+    limits = ResourceLimits(warn_lanes=512, max_lanes=512, warn_pairs=512, max_pairs=64)
+    algebra = make_algebra(10, 4, 2, device=DEVICE, dtype=torch.float32, resource_limits=limits)
     layout = algebra.layout((1,))
     left = torch.zeros(1, layout.dim)
     right = torch.zeros(1, layout.dim)
@@ -68,8 +67,8 @@ def test_context_static_product_cost_limits_raise_before_executor_build():
 
 
 def test_context_static_layout_cost_limit_raises_before_basis_materialization():
-    limits = PlanningLimits(warn_lanes=32, max_lanes=64, warn_pairs=512, max_pairs=1024)
-    algebra = make_algebra(32, 0, 0, device=DEVICE, dtype=torch.float32, planning_limits=limits)
+    limits = ResourceLimits(warn_lanes=32, max_lanes=64, warn_pairs=512, max_pairs=1024)
+    algebra = make_algebra(32, 0, 0, device=DEVICE, dtype=torch.float32, resource_limits=limits)
 
     with pytest.raises(ValueError, match="compact lanes"):
         algebra.layout((1, 2))
@@ -82,7 +81,7 @@ def test_high_dimensional_vector_product_plan_avoids_full_basis_enumeration():
         0,
         device=DEVICE,
         dtype=torch.float32,
-        planning_limits=PlanningLimits(max_lanes=4096, max_pairs=100_000),
+        resource_limits=ResourceLimits(max_lanes=4096, max_pairs=100_000),
     )
     vector_layout = algebra.layout((1,))
     executor = algebra.plan_product(
@@ -106,7 +105,7 @@ def test_high_dimensional_vector_product_plan_avoids_dense_lookup_at_int64_limit
         0,
         device=DEVICE,
         dtype=torch.float32,
-        planning_limits=PlanningLimits(max_lanes=4096, max_pairs=100_000),
+        resource_limits=ResourceLimits(max_lanes=4096, max_pairs=100_000),
     )
     executor = algebra.plan_product(
         op="gp",
@@ -128,7 +127,7 @@ def test_high_dimensional_product_plan_reports_int64_bitmask_boundary():
         0,
         device=DEVICE,
         dtype=torch.float32,
-        planning_limits=PlanningLimits(max_lanes=4096, max_pairs=100_000),
+        resource_limits=ResourceLimits(max_lanes=4096, max_pairs=100_000),
     )
 
     with pytest.raises(ValueError, match="Current Torch-backed executors support bitmask tensorization up to n=63"):
@@ -143,8 +142,8 @@ def test_high_dimensional_product_plan_reports_int64_bitmask_boundary():
 
 
 def test_context_static_product_cost_warns_near_configured_limits():
-    limits = PlanningLimits(warn_lanes=512, max_lanes=512, warn_pairs=128, max_pairs=512)
-    algebra = make_algebra(10, 4, 2, device=DEVICE, dtype=torch.float32, planning_limits=limits)
+    limits = ResourceLimits(warn_lanes=512, max_lanes=512, warn_pairs=128, max_pairs=512)
+    algebra = make_algebra(10, 4, 2, device=DEVICE, dtype=torch.float32, resource_limits=limits)
     layout = algebra.layout((1,))
     left = torch.zeros(1, layout.dim)
     right = torch.zeros(1, layout.dim)

@@ -7,6 +7,7 @@ from tests.planning._grade_plan_helpers import (
     DEVICE,
     AlgebraContext,
     AlgebraSpec,
+    FormulaPolicy,
     FullSandwichActionExecutor,
     FullSandwichActionHandle,
     FullTableProductExecutor,
@@ -16,10 +17,11 @@ from tests.planning._grade_plan_helpers import (
     LaneStorage,
     MultiVersorActionHandle,
     PairedBivectorActionHandle,
-    PlanningLimits,
-    ProductExecutionPolicy,
+    Polynomial,
     ProductPlanHandle,
     PseudoscalarProductExecutor,
+    ResourceLimits,
+    RouteRule,
     SignatureNormSquaredExecutor,
     SmallCliffordOracle,
     UnaryPlanHandle,
@@ -136,21 +138,25 @@ def test_product_executor_rejects_foreign_request_signature(cache):
 def test_product_executor_accepts_layouts_from_equal_signature_algebra():
     algebra = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float32)
     peer = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float32)
-    own = algebra.planner.product_executor(_compact_product_request(
-        algebra,
-        op="gp",
-        left_layout=algebra.layout((1,)),
-        right_layout=algebra.layout((1,)),
-        output_layout=algebra.layout((0,)),
-    ))
+    own = algebra.planner.product_executor(
+        _compact_product_request(
+            algebra,
+            op="gp",
+            left_layout=algebra.layout((1,)),
+            right_layout=algebra.layout((1,)),
+            output_layout=algebra.layout((0,)),
+        )
+    )
 
-    shared = algebra.planner.product_executor(_compact_product_request(
-        algebra,
-        op="gp",
-        left_layout=peer.layout((1,)),
-        right_layout=peer.layout((1,)),
-        output_layout=peer.layout((0,)),
-    ))
+    shared = algebra.planner.product_executor(
+        _compact_product_request(
+            algebra,
+            op="gp",
+            left_layout=peer.layout((1,)),
+            right_layout=peer.layout((1,)),
+            output_layout=peer.layout((0,)),
+        )
+    )
 
     assert shared is own
 
@@ -330,13 +336,15 @@ def test_planner_full_table_executor_matches_small_oracle_full_layout_product(op
     left = torch.randn(3, context.dim, dtype=torch.float64, generator=generator)
     right = torch.randn(3, context.dim, dtype=torch.float64, generator=generator)
 
-    executor = context.planner.product_executor(_compact_product_request(
-        context,
-        op=op,
-        left_layout=full_layout,
-        right_layout=full_layout,
-        output_layout=full_layout,
-    ))
+    executor = context.planner.product_executor(
+        _compact_product_request(
+            context,
+            op=op,
+            left_layout=full_layout,
+            right_layout=full_layout,
+            output_layout=full_layout,
+        )
+    )
     actual = getattr(context, _product_method_name(op))(left, right)
     expected = oracle.product(left, right, op=op)
 
@@ -363,23 +371,31 @@ def test_product_executor_policy_selects_sparse_for_pruned_full_layout_wedge():
         dtype=torch.float64,
         device=DEVICE,
     )
-    executor = context.planner.product_executor(_compact_product_request(
-        context,
-        op="wedge",
-        left_layout=full_layout,
-        right_layout=full_layout,
-        output_layout=full_layout,
-    ))
+    executor = context.planner.product_executor(
+        _compact_product_request(
+            context,
+            op="wedge",
+            left_layout=full_layout,
+            right_layout=full_layout,
+            output_layout=full_layout,
+        )
+    )
 
-    assert cost.executor_family == "sparse"
-    assert cost.sparse_score < cost.full_table_score
+    assert cost.decision.route == "sparse"
+    scores = {row["route"]: row["score"] for row in cost.decision.candidates if row["status"] == "eligible"}
+    assert scores["sparse"] < scores["full_table"]
     assert isinstance(executor, GradeProductExecutor)
     assert torch.allclose(context.wedge(left, right), oracle.product(left, right, op="wedge"), atol=1e-12, rtol=1e-12)
 
 
 def test_product_executor_policy_override_can_force_full_table_full_layout_wedge():
-    policy = ProductExecutionPolicy(cpu_sparse_pair_weight=10.0, cpu_sparse_path_weight=50.0)
-    context = AlgebraContext(6, 0, 0, device=DEVICE, dtype=torch.float64, product_execution_policy=policy)
+    policy = FormulaPolicy(
+        rules=(
+            RouteRule("product", "full_table"),
+            RouteRule("product", "sparse", score=Polynomial(constant=1.0)),
+        )
+    )
+    context = AlgebraContext(6, 0, 0, device=DEVICE, dtype=torch.float64, planning_policy=policy)
     full_layout = context.layout()
 
     cost = estimate_product_executor_cost(
@@ -391,16 +407,19 @@ def test_product_executor_policy_override_can_force_full_table_full_layout_wedge
         dtype=torch.float64,
         device=DEVICE,
     )
-    executor = context.planner.product_executor(_compact_product_request(
-        context,
-        op="wedge",
-        left_layout=full_layout,
-        right_layout=full_layout,
-        output_layout=full_layout,
-    ))
+    executor = context.planner.product_executor(
+        _compact_product_request(
+            context,
+            op="wedge",
+            left_layout=full_layout,
+            right_layout=full_layout,
+            output_layout=full_layout,
+        )
+    )
 
-    assert cost.executor_family == "full_table"
-    assert cost.full_table_score < cost.sparse_score
+    assert cost.decision.route == "full_table"
+    scores = {row["route"]: row["score"] for row in cost.decision.candidates if row["status"] == "eligible"}
+    assert scores["full_table"] < scores["sparse"]
     assert isinstance(executor, FullTableProductExecutor)
 
 
@@ -427,13 +446,20 @@ def test_product_executor_policy_uses_backend_coefficients_without_benchmark_row
         device="mps",
     )
 
-    assert cpu_cost.executor_family == "full_table"
-    assert mps_cost.executor_family == "sparse"
+    assert cpu_cost.decision.route == "full_table"
+    assert mps_cost.decision.route == "sparse"
 
 
 def test_direct_product_executor_obeys_static_pair_limits():
-    limits = PlanningLimits(warn_lanes=512, max_lanes=512, warn_pairs=512, max_pairs=64)
-    algebra = make_algebra(16, 0, 0, device=DEVICE, dtype=torch.float32, planning_limits=limits)
+    limits = ResourceLimits(warn_lanes=512, max_lanes=512, warn_pairs=512, max_pairs=64)
+    algebra = make_algebra(
+        16,
+        0,
+        0,
+        device=DEVICE,
+        dtype=torch.float32,
+        resource_limits=limits,
+    )
 
     with pytest.raises(ValueError, match="basis interactions"):
         algebra.plan_product(

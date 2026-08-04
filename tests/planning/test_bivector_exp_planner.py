@@ -10,7 +10,7 @@ from clifra.core.execution.exp import BivectorExpExecutor
 from clifra.core.foundation.layout import AlgebraSpec
 from clifra.core.planning.exp import (
     SPECTRAL_LOCAL_TRUNCATION_NOTICE,
-    BivectorExpExecutionPolicy,
+    BivectorExpOptions,
     format_spectral_exp_uniform_tail_stress,
     select_bivector_exp_executor_family,
     spectral_exp_angle_diagnostics,
@@ -171,7 +171,7 @@ def test_bivector_exp_spectral_preselection_selects_default_and_cap():
     assert enabled.max_planes == 4
     assert capped.max_planes == 2
     assert dominant.dominant_rel == 0.05
-    assert enabled.dominant_rel == max(torch.finfo(torch.float32).eps**0.5, torch.finfo(torch.float32).eps * 32.0)
+    assert enabled.dominant_rel == max(torch.finfo(torch.float32).eps ** 0.5, torch.finfo(torch.float32).eps * 32.0)
     assert enabled.solver_family == "symmetric"
     assert spectral_exp_preselection(spec, torch.device("cpu"), dtype=torch.float32, max_planes=8).max_planes == 4
     assert (
@@ -233,8 +233,6 @@ def test_bivector_exp_spectral_uniform_tail_stress_reports_static_worst_case():
 @pytest.mark.parametrize(
     ("spec", "dtype", "device", "reason"),
     [
-        (AlgebraSpec(5, 0, 0), torch.float32, torch.device("cpu"), "closed_formula_preferred"),
-        (AlgebraSpec(6, 0, 0), torch.float32, torch.device("cpu"), "matrix_exp_below_spectral_transition"),
         (AlgebraSpec(4, 0, 5), torch.float32, torch.device("cpu"), "ideal_dim_exceeds_block_cap"),
         (AlgebraSpec(3, 3, 0), torch.float32, torch.device("cpu"), "pseudo_euclidean_matrix_exp"),
         (AlgebraSpec(6, 0, 0), torch.bfloat16, torch.device("cpu"), "dtype_error_floor_too_high"),
@@ -260,13 +258,12 @@ def test_bivector_exp_spectral_preselection_uses_mps_routes_without_mps_matrix_e
 
 
 def test_bivector_exp_spectral_preselection_truncates_degenerate_kernels_by_default():
-    odd = spectral_exp_preselection(AlgebraSpec(5, 0, 1), torch.device("cpu"), dtype=torch.float32, transition_n=6)
+    odd = spectral_exp_preselection(AlgebraSpec(5, 0, 1), torch.device("cpu"), dtype=torch.float32)
     uncovered = spectral_exp_preselection(AlgebraSpec(10, 0, 2), torch.device("cpu"), dtype=torch.float32)
     conservative_odd = spectral_exp_preselection(
         AlgebraSpec(5, 0, 1),
         torch.device("cpu"),
         dtype=torch.float32,
-        transition_n=6,
         allow_truncated_degenerate=False,
     )
     conservative_uncovered = spectral_exp_preselection(
@@ -285,14 +282,14 @@ def test_bivector_exp_spectral_preselection_truncates_degenerate_kernels_by_defa
 
 
 def test_bivector_exp_policy_knobs_connect_through_algebra_context():
-    policy = BivectorExpExecutionPolicy(
+    options = BivectorExpOptions(
         spectral_max_planes=2,
         spectral_tol_abs=0.0,
         spectral_tol_rel=0.0,
         spectral_dominant_rel=0.05,
         spectral_allow_truncated_degenerate=False,
     )
-    algebra = make_algebra(10, 0, 2, device=DEVICE, dtype=torch.float64, bivector_exp_execution_policy=policy)
+    algebra = make_algebra(10, 0, 2, device=DEVICE, dtype=torch.float64, bivector_exp_options=options)
     bivector_layout = algebra.layout((2,))
     output_layout = algebra.layout((0, 2))
     conservative = algebra.plan_bivector_exp(input_layout=bivector_layout, output_layout=output_layout)
@@ -355,7 +352,9 @@ def test_mps_high_dim_bivector_exp_plans_spectral_local_family():
     algebra = AlgebraContext(6, 0, device="mps", dtype=torch.float32)
     input_layout = algebra.layout((2,))
     output_layout = algebra.layout((0, 2, 4, 6))
-    executor = algebra.plan_bivector_exp(input_layout=input_layout, output_layout=output_layout, dtype=torch.float32, device="mps")
+    executor = algebra.plan_bivector_exp(
+        input_layout=input_layout, output_layout=output_layout, dtype=torch.float32, device="mps"
+    )
 
     assert executor.executor_family == "spectral_local"
     assert executor.left_product is None
@@ -366,7 +365,9 @@ def test_mps_mixed_bivector_exp_plans_cpu_matrix_exp_family():
     algebra = AlgebraContext(3, 3, device="mps", dtype=torch.float32)
     input_layout = algebra.layout((2,))
     output_layout = algebra.layout((0, 2, 4, 6))
-    executor = algebra.plan_bivector_exp(input_layout=input_layout, output_layout=output_layout, dtype=torch.float32, device="mps")
+    executor = algebra.plan_bivector_exp(
+        input_layout=input_layout, output_layout=output_layout, dtype=torch.float32, device="mps"
+    )
 
     assert executor.executor_family == "cpu_matrix_exp"
     assert executor.left_product is not None
@@ -385,12 +386,15 @@ def test_bivector_exp_executor_compiles_fullgraph_with_aot_eager():
         dtype=torch.float32,
         device=DEVICE,
     )
-    values = torch.randn(
-        4,
-        input_layout.dim,
-        dtype=torch.float32,
-        generator=torch.Generator(device=DEVICE).manual_seed(283),
-    ) * 0.1
+    values = (
+        torch.randn(
+            4,
+            input_layout.dim,
+            dtype=torch.float32,
+            generator=torch.Generator(device=DEVICE).manual_seed(283),
+        )
+        * 0.1
+    )
 
     compiled = torch.compile(executor, backend="aot_eager", fullgraph=True)
 
@@ -412,17 +416,22 @@ def test_planned_bivector_exp_public_call_compiles_fullgraph_after_cache_warm():
     algebra = AlgebraContext(4, 0, device=DEVICE, dtype=torch.float32)
     input_layout = algebra.layout((2,))
     output_layout = algebra.layout((0, 2, 4))
-    values = torch.randn(
-        4,
-        input_layout.dim,
-        dtype=torch.float32,
-        generator=torch.Generator(device=DEVICE).manual_seed(287),
-    ) * 0.1
+    values = (
+        torch.randn(
+            4,
+            input_layout.dim,
+            dtype=torch.float32,
+            generator=torch.Generator(device=DEVICE).manual_seed(287),
+        )
+        * 0.1
+    )
 
     def exp_public(x):
         return algebra.bivector_exp(x, input_layout=input_layout, output_layout=output_layout)
 
-    algebra.plan_bivector_exp(input_layout=input_layout, output_layout=output_layout, dtype=torch.float32, device=DEVICE)
+    algebra.plan_bivector_exp(
+        input_layout=input_layout, output_layout=output_layout, dtype=torch.float32, device=DEVICE
+    )
     expected = bivector_exp_cpu_reference(
         algebra,
         values,

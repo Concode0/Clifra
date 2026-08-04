@@ -470,6 +470,7 @@ class VersorActionExecutor(_VersorFactorPlanMixin, nn.Module):
         input_layout: GradeLayout,
         output_layout: GradeLayout,
         parameter_layout: GradeLayout,
+        execution_path: str,
     ):
         super().__init__()
         object.__setattr__(self, "algebra", algebra)
@@ -483,13 +484,11 @@ class VersorActionExecutor(_VersorFactorPlanMixin, nn.Module):
         self.input_layout = input_layout
         self.output_layout = output_layout
         self.parameter_layout = parameter_layout
-        self.use_full_action = input_layout.dim == algebra.dim and output_layout.dim == algebra.dim
-        self.use_rotor_product_action = _prefer_rotor_product_action(
-            grade=self.grade,
-            input_layout=input_layout,
-            output_layout=output_layout,
-            use_full_action=self.use_full_action,
-        )
+        self.execution_path = str(execution_path)
+        if self.execution_path not in {"vector_matrix", "rotor_product", "full_action_matrix"}:
+            raise ValueError(f"unsupported versor action execution path {self.execution_path!r}")
+        self.use_full_action = self.execution_path == "full_action_matrix"
+        self.use_rotor_product_action = self.execution_path == "rotor_product"
         self.action = None
         self.vector_matrix = None
         self.left_product = None
@@ -574,6 +573,7 @@ class MultiVersorActionExecutor(_VersorFactorPlanMixin, nn.Module):
         input_layout: GradeLayout,
         output_layout: GradeLayout,
         parameter_layout: GradeLayout,
+        execution_path: str,
     ):
         super().__init__()
         object.__setattr__(self, "algebra", algebra)
@@ -587,13 +587,11 @@ class MultiVersorActionExecutor(_VersorFactorPlanMixin, nn.Module):
         self.input_layout = input_layout
         self.output_layout = output_layout
         self.parameter_layout = parameter_layout
-        self.use_full_action = input_layout.dim == algebra.dim and output_layout.dim == algebra.dim
-        self.use_rotor_product_action = _prefer_rotor_product_action(
-            grade=self.grade,
-            input_layout=input_layout,
-            output_layout=output_layout,
-            use_full_action=self.use_full_action,
-        )
+        self.execution_path = str(execution_path)
+        if self.execution_path not in {"vector_matrix", "rotor_product", "full_action_matrix"}:
+            raise ValueError(f"unsupported multi-versor action execution path {self.execution_path!r}")
+        self.use_full_action = self.execution_path == "full_action_matrix"
+        self.use_rotor_product_action = self.execution_path == "rotor_product"
         self.action = None
         self.vector_matrix = None
         self.left_product = None
@@ -685,6 +683,7 @@ class PairedBivectorActionExecutor(nn.Module):
         parameter_layout: GradeLayout,
         rotor_layout: GradeLayout,
         middle_layout: GradeLayout,
+        execution_path: str,
     ):
         super().__init__()
         self.input_contract = resolve_contract(algebra, layout=input_layout, name="input_layout")
@@ -705,7 +704,10 @@ class PairedBivectorActionExecutor(nn.Module):
         self.parameter_layout = parameter_layout
         self.rotor_layout = rotor_layout
         self.middle_layout = middle_layout
-        self.use_full_action = input_layout.dim == algebra.dim and output_layout.dim == algebra.dim
+        self.execution_path = str(execution_path)
+        if self.execution_path not in {"full_action_matrix", "paired_rotor_product"}:
+            raise ValueError(f"unsupported paired action execution path {self.execution_path!r}")
+        self.use_full_action = self.execution_path == "full_action_matrix"
         self.full_dim = int(algebra.dim)
         self.full_action = (
             FullSandwichActionExecutor.from_layout(
@@ -960,22 +962,6 @@ def _graded_action_plan_tensors(
         torch.tensor(row_indices, dtype=torch.long),
         torch.tensor(col_indices, dtype=torch.long),
     )
-
-
-def _prefer_rotor_product_action(
-    *,
-    grade: int,
-    input_layout: GradeLayout,
-    output_layout: GradeLayout,
-    use_full_action: bool,
-) -> bool:
-    if int(grade) != 2 or use_full_action:
-        return False
-    return not _is_vector_to_vector_action(input_layout, output_layout)
-
-
-def _is_vector_to_vector_action(input_layout: GradeLayout, output_layout: GradeLayout) -> bool:
-    return input_layout.grades == (1,) and output_layout.grades == (1,)
 
 
 def _layout_indices(layout: GradeLayout, *, device=None) -> torch.Tensor:

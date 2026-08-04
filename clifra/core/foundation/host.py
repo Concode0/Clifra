@@ -232,7 +232,6 @@ class AlgebraHostMixin:
         spectral_tol_abs: Optional[float] = None,
         spectral_tol_rel: Optional[float] = None,
         spectral_dominant_rel: Optional[float] = None,
-        spectral_transition_n: Optional[int] = None,
         spectral_allow_degenerate: Optional[bool] = None,
         spectral_allow_truncated_degenerate: Optional[bool] = None,
     ):
@@ -258,7 +257,6 @@ class AlgebraHostMixin:
             spectral_tol_abs=spectral_tol_abs,
             spectral_tol_rel=spectral_tol_rel,
             spectral_dominant_rel=spectral_dominant_rel,
-            spectral_transition_n=spectral_transition_n,
             spectral_allow_degenerate=spectral_allow_degenerate,
             spectral_allow_truncated_degenerate=spectral_allow_truncated_degenerate,
         )
@@ -304,12 +302,19 @@ class AlgebraHostMixin:
             parameter_layout or self.layout((int(grade),)),
             name="parameter_layout",
         ).layout
+        plan = self.planner.versor_action_plan(
+            grade=int(grade),
+            input_layout=input_layout,
+            output_layout=output_layout,
+            parameter_layout=parameter_layout,
+        )
         executor = VersorActionExecutor(
             self,
             grade=int(grade),
             input_layout=input_layout,
             output_layout=output_layout,
             parameter_layout=parameter_layout,
+            execution_path=plan.execution_path,
         )
         return VersorActionHandle(executor)
 
@@ -332,12 +337,19 @@ class AlgebraHostMixin:
             parameter_layout or self.layout((int(grade),)),
             name="parameter_layout",
         ).layout
+        plan = self.planner.versor_action_plan(
+            grade=int(grade),
+            input_layout=input_layout,
+            output_layout=output_layout,
+            parameter_layout=parameter_layout,
+        )
         executor = MultiVersorActionExecutor(
             self,
             grade=int(grade),
             input_layout=input_layout,
             output_layout=output_layout,
             parameter_layout=parameter_layout,
+            execution_path=plan.execution_path,
         )
         return MultiVersorActionHandle(executor)
 
@@ -371,6 +383,7 @@ class AlgebraHostMixin:
             parameter_layout=plan.parameter_layout,
             rotor_layout=plan.rotor_layout,
             middle_layout=plan.middle_layout,
+            execution_path=plan.execution_path,
         )
         return PairedBivectorActionHandle(executor)
 
@@ -617,7 +630,6 @@ class AlgebraHostMixin:
         spectral_tol_abs: Optional[float] = None,
         spectral_tol_rel: Optional[float] = None,
         spectral_dominant_rel: Optional[float] = None,
-        spectral_transition_n: Optional[int] = None,
         spectral_allow_degenerate: Optional[bool] = None,
         spectral_allow_truncated_degenerate: Optional[bool] = None,
         output_storage: LaneStorage | str = LaneStorage.COMPACT,
@@ -642,7 +654,6 @@ class AlgebraHostMixin:
             spectral_tol_abs=spectral_tol_abs,
             spectral_tol_rel=spectral_tol_rel,
             spectral_dominant_rel=spectral_dominant_rel,
-            spectral_transition_n=spectral_transition_n,
             spectral_allow_degenerate=spectral_allow_degenerate,
             spectral_allow_truncated_degenerate=spectral_allow_truncated_degenerate,
         )

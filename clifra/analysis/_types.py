@@ -9,13 +9,12 @@ from typing import Dict, List, Optional, Tuple
 
 import torch
 
-from clifra.core.planning.policy import FULL_TABLE_AUTO_MAX_N, FULL_TABLE_EXPLICIT_MAX_N
-
 GP_SPECTRUM_MATRIX_ENTRIES = 1 << (2 * 10)
 ADJOINT_MATRIX_ENTRIES = 1 << (2 * 8)
-AUTO_FULL_PRODUCT_PAIRS = 1 << (2 * FULL_TABLE_AUTO_MAX_N)
-EXPLICIT_ACTION_MATRIX_LANES = 1 << FULL_TABLE_EXPLICIT_MAX_N
+AUTO_FULL_PRODUCT_PAIRS = 1 << 16
+EXPLICIT_ACTION_MATRIX_LANES = 1 << 12
 EXPLICIT_ACTION_MATRIX_ENTRIES = EXPLICIT_ACTION_MATRIX_LANES * EXPLICIT_ACTION_MATRIX_LANES
+SIGNATURE_SEARCH_MAX_DIM = 10
 
 
 @dataclass
@@ -96,7 +95,7 @@ class AnalysisConstants:
     signature_probe_bias_noise_std: float = 0.05
     signature_probe_projective_init_bound: float = 0.5
     signature_probe_random_init_std: float = 0.3
-    signature_search_max_dim: int = FULL_TABLE_EXPLICIT_MAX_N - 2
+    signature_search_max_dim: int = SIGNATURE_SEARCH_MAX_DIM
     signature_bootstrap_resamples: int = 10
     signature_bootstrap_max_samples: int = 500
     low_energy_vector_threshold: float = 0.01

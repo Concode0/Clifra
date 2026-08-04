@@ -16,14 +16,10 @@ from clifra.core.foundation.basis import normalize_grades
 from clifra.core.foundation.device import resolve_device, resolve_dtype
 from clifra.core.foundation.host import AlgebraHostMixin
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
-from clifra.core.planning.exp import DEFAULT_BIVECTOR_EXP_EXECUTION_POLICY, BivectorExpExecutionPolicy
+from clifra.core.planning.exp import DEFAULT_BIVECTOR_EXP_OPTIONS, BivectorExpOptions
 from clifra.core.planning.planner import GradePlanner
-from clifra.core.planning.policy import (
-    DEFAULT_PLANNING_LIMITS,
-    DEFAULT_PRODUCT_EXECUTION_POLICY,
-    PlanningLimits,
-    ProductExecutionPolicy,
-)
+from clifra.core.planning.policy import DEFAULT_PLANNING_POLICY, PlanningPolicy
+from clifra.core.planning.resources import DEFAULT_RESOURCE_LIMITS, ResourceLimits
 from clifra.core.runtime.tensors import LaneStorage
 
 
@@ -39,9 +35,9 @@ class AlgebraContext(AlgebraHostMixin):
         device="cuda",
         dtype: torch.dtype = torch.float32,
         default_grades: Optional[Iterable[int]] = None,
-        planning_limits: Optional[PlanningLimits] = None,
-        product_execution_policy: Optional[ProductExecutionPolicy] = None,
-        bivector_exp_execution_policy: Optional[BivectorExpExecutionPolicy] = None,
+        planning_policy: Optional[PlanningPolicy] = None,
+        resource_limits: Optional[ResourceLimits] = None,
+        bivector_exp_options: Optional[BivectorExpOptions] = None,
     ):
         if p < 0 or q < 0 or r < 0:
             raise ValueError(f"signature counts must be non-negative, got Cl({p},{q},{r})")
@@ -55,20 +51,22 @@ class AlgebraContext(AlgebraHostMixin):
         self.spec = AlgebraSpec(self.p, self.q, self.r)
         self._device = torch.device(resolve_device(device) if str(device) == "auto" else device)
         self._dtype = resolve_dtype(dtype)
-        self.planning_limits = DEFAULT_PLANNING_LIMITS if planning_limits is None else planning_limits
-        self.product_execution_policy = (
-            DEFAULT_PRODUCT_EXECUTION_POLICY if product_execution_policy is None else product_execution_policy
-        )
-        self.bivector_exp_execution_policy = (
-            DEFAULT_BIVECTOR_EXP_EXECUTION_POLICY
-            if bivector_exp_execution_policy is None
-            else bivector_exp_execution_policy
+        self._planning_policy = DEFAULT_PLANNING_POLICY if planning_policy is None else planning_policy
+        hash(self._planning_policy.fingerprint)
+        self.resource_limits = DEFAULT_RESOURCE_LIMITS if resource_limits is None else resource_limits
+        self.bivector_exp_options = (
+            DEFAULT_BIVECTOR_EXP_OPTIONS if bivector_exp_options is None else bivector_exp_options
         )
         self._default_grades = None if default_grades is None else normalize_grades(default_grades, self.n)
         self._default_layout: Optional[GradeLayout] = None
         self._g1_indices_cache: dict[str, torch.Tensor] = {}
         self.planner = GradePlanner(self)
         self._sync_eps()
+
+    @property
+    def planning_policy(self) -> PlanningPolicy:
+        """Return the immutable route policy injected at construction."""
+        return self._planning_policy
 
     @property
     def device(self):
@@ -95,7 +93,7 @@ class AlgebraContext(AlgebraHostMixin):
             self._dtype = probe.dtype
         self._sync_eps()
         self._g1_indices_cache.clear()
-        self.planner._apply(fn)
+        self.planner.clear_cache()
         return self
 
     def to(self, device=None, dtype=None):
@@ -165,7 +163,6 @@ class AlgebraContext(AlgebraHostMixin):
         spectral_tol_abs: Optional[float] = None,
         spectral_tol_rel: Optional[float] = None,
         spectral_dominant_rel: Optional[float] = None,
-        spectral_transition_n: Optional[int] = None,
         spectral_allow_degenerate: Optional[bool] = None,
         spectral_allow_truncated_degenerate: Optional[bool] = None,
         output_storage: LaneStorage | str = LaneStorage.COMPACT,
@@ -183,7 +180,6 @@ class AlgebraContext(AlgebraHostMixin):
             spectral_tol_abs=spectral_tol_abs,
             spectral_tol_rel=spectral_tol_rel,
             spectral_dominant_rel=spectral_dominant_rel,
-            spectral_transition_n=spectral_transition_n,
             spectral_allow_degenerate=spectral_allow_degenerate,
             spectral_allow_truncated_degenerate=spectral_allow_truncated_degenerate,
             output_storage=output_storage,

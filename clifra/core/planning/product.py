@@ -12,6 +12,7 @@ and all basis interactions are expanded once. Hot tensor execution lives in
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Iterable, Optional
 
 import torch
@@ -25,8 +26,107 @@ from clifra.core.foundation.basis import (
 )
 from clifra.core.foundation.layout import AlgebraSpec
 from clifra.core.planning.layouts import ProductRequest
+from clifra.core.planning.policy import (
+    PlanCandidate,
+    PlanFacts,
+    PlanningPolicy,
+    RouteDecision,
+    environment_extensions,
+    select_policy_route,
+)
 from clifra.core.planning.tree import GradePlanTree, build_grade_plan_tree
 from clifra.core.runtime.tensors import TensorContract
+
+
+@dataclass(frozen=True)
+class ProductExecutorCost:
+    """Selected product route and its static resource summary."""
+
+    decision: RouteDecision
+    pair_count: int
+    path_count: int
+    backend: str
+
+
+def estimate_product_executor_cost(
+    algebra,
+    *,
+    op: str,
+    left_layout,
+    right_layout,
+    output_layout,
+    dtype: torch.dtype,
+    device,
+    policy: PlanningPolicy | None = None,
+) -> ProductExecutorCost:
+    """Enumerate product routes and select one using common plan facts."""
+    policy = algebra.planning_policy if policy is None else policy
+    tree = build_grade_plan_tree(
+        left_layout.spec,
+        op=op,
+        left_grades=left_layout.grades,
+        right_grades=right_layout.grades,
+        output_grades=output_layout.grades,
+    )
+    backend = _device_backend(device)
+    dtype_bytes = torch.empty((), dtype=dtype).element_size()
+    full_table_pairs = left_layout.dim * right_layout.dim
+    sparse_pairs = tree.estimated_pairs
+    full_table_bytes = full_table_pairs * (8 + dtype_bytes)
+    sparse_bytes = sparse_pairs * (24 + dtype_bytes)
+    full_grades = tuple(range(left_layout.spec.n + 1))
+    full_table_supported = (
+        left_layout.grades == full_grades and right_layout.grades == full_grades and output_layout.grades == full_grades
+    )
+
+    def candidate(route: str, pair_count: int, peak_bytes: int, unavailable_reason=None) -> PlanCandidate:
+        extensions = {
+            **environment_extensions(left_layout.spec, backend, dtype_bytes),
+            "layout.left_lanes": left_layout.dim,
+            "layout.right_lanes": right_layout.dim,
+            "layout.output_lanes": output_layout.dim,
+            "product.pair_count": pair_count,
+            "product.path_count": tree.path_count,
+            "product.memory_units": peak_bytes / 4096.0,
+        }
+        return PlanCandidate(
+            "product",
+            route,
+            PlanFacts(
+                forward_work=pair_count,
+                backward_work=pair_count * 2,
+                peak_bytes=peak_bytes,
+                compile_work=tree.path_count,
+                extensions=extensions,
+            ),
+            unavailable_reason,
+        )
+
+    decision = select_policy_route(
+        policy,
+        (
+            candidate(
+                "full_table",
+                full_table_pairs,
+                full_table_bytes,
+                None if full_table_supported else "requires_canonical_full_layouts",
+            ),
+            candidate("sparse", sparse_pairs, sparse_bytes),
+        ),
+    )
+    return ProductExecutorCost(
+        decision,
+        full_table_pairs if decision.route == "full_table" else sparse_pairs,
+        tree.path_count,
+        backend,
+    )
+
+
+def _device_backend(device) -> str:
+    if device is None:
+        return "cpu"
+    device_type = torch.device(device).type
+    return device_type if device_type in {"cpu", "mps"} else "other"
 
 
 class GradeProductPlan:
@@ -439,7 +539,9 @@ def _positions_in_sorted_indices(values: torch.Tensor, sorted_indices: torch.Ten
         return torch.full_like(values, -1)
     positions = torch.searchsorted(sorted_indices, values)
     clamped = positions.clamp_max(sorted_indices.numel() - 1)
-    found = (positions < sorted_indices.numel()) & (torch.index_select(sorted_indices, 0, clamped.reshape(-1)).reshape_as(values) == values)
+    found = (positions < sorted_indices.numel()) & (
+        torch.index_select(sorted_indices, 0, clamped.reshape(-1)).reshape_as(values) == values
+    )
     return torch.where(found, positions, torch.full_like(positions, -1))
 
 

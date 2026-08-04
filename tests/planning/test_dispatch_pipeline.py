@@ -5,7 +5,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from clifra.core.planning import PlanningLimits
+from clifra.core.planning import ResourceLimits
 from clifra.core.runtime.algebra import AlgebraContext
 from clifra.layers import CliffordLinear, ProductLayer, WedgeLayer
 from clifra.optimizers import make_riemannian_optimizer
@@ -166,9 +166,9 @@ def test_rotor_backend_linear_trains_with_riemannian_optimizer_factory():
     assert all(torch.isfinite(parameter).all() for parameter in model.parameters())
 
 
-def test_product_layer_uses_context_planning_limits():
-    limits = PlanningLimits(warn_lanes=32, max_lanes=512, warn_pairs=32, max_pairs=64)
-    context = AlgebraContext(p=16, q=0, device="cpu", planning_limits=limits)
+def test_product_layer_uses_context_resource_limits():
+    limits = ResourceLimits(warn_lanes=32, max_lanes=512, warn_pairs=32, max_pairs=64)
+    context = AlgebraContext(p=16, q=0, device="cpu", resource_limits=limits)
     vector_layout = context.layout((1,))
     left = torch.zeros(1, vector_layout.dim)
     right = torch.zeros(1, vector_layout.dim)

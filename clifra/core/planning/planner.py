@@ -24,20 +24,20 @@ from clifra.core.planning.action import (
     build_paired_bivector_action_plan,
     build_versor_action_plan,
 )
-from clifra.core.planning.exp import DEFAULT_BIVECTOR_EXP_EXECUTION_POLICY, build_bivector_exp_plan
+from clifra.core.planning.exp import DEFAULT_BIVECTOR_EXP_OPTIONS, build_bivector_exp_plan
 from clifra.core.planning.layouts import ProductRequest, build_product_request, normalize_product_op
 from clifra.core.planning.metric import build_signature_norm_squared_plan
 from clifra.core.planning.permutation import build_pseudoscalar_product_plan
-from clifra.core.planning.policy import (
+from clifra.core.planning.product import (
+    build_full_table_product_plan_from_request,
+    build_grade_product_plan_from_request,
     estimate_product_executor_cost,
+)
+from clifra.core.planning.resources import (
     validate_grades_cost,
     validate_product_grades_cost,
     validate_product_request,
     validate_unary_request,
-)
-from clifra.core.planning.product import (
-    build_full_table_product_plan_from_request,
-    build_grade_product_plan_from_request,
 )
 from clifra.core.planning.tree import build_grade_plan_tree
 from clifra.core.planning.unary import (
@@ -64,6 +64,8 @@ class GradePlanner:
         self._pseudoscalar_product_executors = {}
         self._bivector_exp_executors = {}
         self._full_sandwich_action_executors = {}
+        self._versor_action_plans = {}
+        self._paired_bivector_action_plans = {}
         self._bivector_signs_cache = {}
 
     def layout(self, grades):
@@ -112,47 +114,9 @@ class GradePlanner:
         self._pseudoscalar_product_executors.clear()
         self._bivector_exp_executors.clear()
         self._full_sandwich_action_executors.clear()
+        self._versor_action_plans.clear()
+        self._paired_bivector_action_plans.clear()
         self._bivector_signs_cache.clear()
-
-    def _apply(self, fn):
-        """Apply a PyTorch module-style transform to cached executor buffers."""
-        product_executors = list(self._product_executors.values())
-        self._product_executors.clear()
-        self._bivector_signs_cache.clear()
-        for executor in product_executors:
-            executor._apply(fn)
-            self._product_executors[self._product_cache_key(executor)] = executor
-
-        unary_executors = list(self._unary_executors.values())
-        self._unary_executors.clear()
-        for executor in unary_executors:
-            executor._apply(fn)
-            self._unary_executors[self._unary_cache_key(executor)] = executor
-
-        signature_norm_squared_executors = list(self._signature_norm_squared_executors.values())
-        self._signature_norm_squared_executors.clear()
-        for executor in signature_norm_squared_executors:
-            executor._apply(fn)
-            self._signature_norm_squared_executors[self._signature_norm_squared_cache_key(executor)] = executor
-
-        pseudoscalar_product_executors = list(self._pseudoscalar_product_executors.values())
-        self._pseudoscalar_product_executors.clear()
-        for executor in pseudoscalar_product_executors:
-            executor._apply(fn)
-            self._pseudoscalar_product_executors[self._pseudoscalar_product_cache_key(executor)] = executor
-
-        bivector_exp_executors = list(self._bivector_exp_executors.values())
-        self._bivector_exp_executors.clear()
-        for executor in bivector_exp_executors:
-            executor._apply(fn)
-            self._bivector_exp_executors[self._bivector_exp_cache_key(executor)] = executor
-
-        full_action_executors = list(self._full_sandwich_action_executors.values())
-        self._full_sandwich_action_executors.clear()
-        for executor in full_action_executors:
-            executor._apply(fn)
-            self._full_sandwich_action_executors[self._full_sandwich_action_cache_key(executor)] = executor
-        return self
 
     def product_executor(
         self,
@@ -163,8 +127,12 @@ class GradePlanner:
         """Return the cached executor for one normalized product request."""
         request.validate(self.spec)
         validate_product_request(self.algebra, request)
+        key = self._product_request_cache_key(request)
+        executor = self._product_executors.get(key) if cache else None
+        if executor is not None:
+            return executor
         family = self._product_executor_family(request)
-        key = self._product_request_cache_key(request, family)
+        key = self._product_request_cache_key(request)
         executor = self._product_executors.get(key) if cache else None
         if executor is None:
             if family == "full_table":
@@ -366,7 +334,6 @@ class GradePlanner:
         spectral_tol_abs: float | None = None,
         spectral_tol_rel: float | None = None,
         spectral_dominant_rel: float | None = None,
-        spectral_transition_n: int | None = None,
         spectral_allow_degenerate: bool | None = None,
         spectral_allow_truncated_degenerate: bool | None = None,
     ) -> BivectorExpExecutor:
@@ -376,49 +343,81 @@ class GradePlanner:
         if input_layout.grades != (2,):
             raise ValueError(f"bivector exp requires grade-2 input layout, got {input_layout.grades}")
         resolved_device = torch.device(device)
-        policy = getattr(self.algebra, "bivector_exp_execution_policy", DEFAULT_BIVECTOR_EXP_EXECUTION_POLICY)
-        resolved_spectral_max_planes = policy.spectral_max_planes if spectral_max_planes is None else spectral_max_planes
-        resolved_spectral_tol_abs = policy.spectral_tol_abs if spectral_tol_abs is None else spectral_tol_abs
-        resolved_spectral_tol_rel = policy.spectral_tol_rel if spectral_tol_rel is None else spectral_tol_rel
-        resolved_spectral_dominant_rel = (
-            policy.spectral_dominant_rel if spectral_dominant_rel is None else spectral_dominant_rel
+        options = getattr(self.algebra, "bivector_exp_options", DEFAULT_BIVECTOR_EXP_OPTIONS)
+        resolved_spectral_max_planes = (
+            options.spectral_max_planes if spectral_max_planes is None else spectral_max_planes
         )
-        resolved_spectral_transition_n = (
-            policy.spectral_transition_n if spectral_transition_n is None else int(spectral_transition_n)
+        resolved_spectral_tol_abs = options.spectral_tol_abs if spectral_tol_abs is None else spectral_tol_abs
+        resolved_spectral_tol_rel = options.spectral_tol_rel if spectral_tol_rel is None else spectral_tol_rel
+        resolved_spectral_dominant_rel = (
+            options.spectral_dominant_rel if spectral_dominant_rel is None else spectral_dominant_rel
         )
         resolved_spectral_allow_degenerate = (
-            policy.spectral_allow_degenerate if spectral_allow_degenerate is None else bool(spectral_allow_degenerate)
+            options.spectral_allow_degenerate if spectral_allow_degenerate is None else bool(spectral_allow_degenerate)
         )
         resolved_spectral_allow_truncated_degenerate = (
-            policy.spectral_allow_truncated_degenerate
+            options.spectral_allow_truncated_degenerate
             if spectral_allow_truncated_degenerate is None
             else bool(spectral_allow_truncated_degenerate)
         )
+        full_rank_planes = (self.spec.p + self.spec.q) // 2
+        resolved_spectral_max_planes = (
+            min(full_rank_planes, 4)
+            if resolved_spectral_max_planes is None
+            else min(int(resolved_spectral_max_planes), full_rank_planes, 4)
+        )
+        resolved_spectral_tol_abs = (
+            float(torch.finfo(dtype).eps * 32.0)
+            if resolved_spectral_tol_abs is None
+            else float(resolved_spectral_tol_abs)
+        )
+        resolved_spectral_dominant_rel = (
+            float(max(torch.finfo(dtype).eps ** 0.5, torch.finfo(dtype).eps * 32.0))
+            if resolved_spectral_dominant_rel is None
+            else float(resolved_spectral_dominant_rel)
+        )
+        key = (
+            self.spec,
+            str(resolved_device),
+            str(dtype),
+            self.algebra.planning_policy.fingerprint,
+            "bivector_exp",
+            resolved_spectral_max_planes,
+            resolved_spectral_tol_abs,
+            resolved_spectral_tol_rel,
+            resolved_spectral_dominant_rel,
+            resolved_spectral_allow_degenerate,
+            resolved_spectral_allow_truncated_degenerate,
+            input_layout.grades,
+            output_layout.grades,
+        )
+        executor = self._bivector_exp_executors.get(key) if cache else None
+        if executor is not None:
+            return executor
         plan = build_bivector_exp_plan(
             self.spec,
             input_layout=input_layout,
             output_layout=output_layout,
             dtype=dtype,
             device=resolved_device,
-            spectral_max_planes=resolved_spectral_max_planes,
+            spectral_max_planes=None if full_rank_planes == 0 else resolved_spectral_max_planes,
             spectral_tol_abs=resolved_spectral_tol_abs,
             spectral_tol_rel=resolved_spectral_tol_rel,
             spectral_dominant_rel=resolved_spectral_dominant_rel,
-            spectral_transition_n=resolved_spectral_transition_n,
             spectral_allow_degenerate=resolved_spectral_allow_degenerate,
             spectral_allow_truncated_degenerate=resolved_spectral_allow_truncated_degenerate,
+            planning_policy=self.algebra.planning_policy,
         )
         key = (
             self.spec,
             str(resolved_device),
             str(dtype),
+            self.algebra.planning_policy.fingerprint,
             "bivector_exp",
-            plan.executor_family,
             plan.spectral_max_planes,
             plan.spectral_tol_abs,
             plan.spectral_tol_rel,
             plan.spectral_dominant_rel,
-            plan.spectral_transition_n,
             plan.spectral_allow_degenerate,
             plan.spectral_allow_truncated_degenerate,
             input_layout.grades,
@@ -549,13 +548,24 @@ class GradePlanner:
             output_layout = self._compact_contract(output_layout, "output_layout").layout
         if parameter_layout is not None:
             parameter_layout = self._compact_contract(parameter_layout, "parameter_layout").layout
-        return build_versor_action_plan(
-            self.algebra,
-            grade=grade,
-            input_layout=input_layout,
-            output_layout=output_layout,
-            parameter_layout=parameter_layout,
+        key = self._action_plan_cache_key(
+            "versor_action",
+            int(grade),
+            input_layout,
+            output_layout,
+            parameter_layout,
         )
+        plan = self._versor_action_plans.get(key)
+        if plan is None:
+            plan = build_versor_action_plan(
+                self.algebra,
+                grade=grade,
+                input_layout=input_layout,
+                output_layout=output_layout,
+                parameter_layout=parameter_layout,
+            )
+            self._versor_action_plans[key] = plan
+        return plan
 
     def paired_bivector_action_plan(
         self,
@@ -570,12 +580,23 @@ class GradePlanner:
             output_layout = self._compact_contract(output_layout, "output_layout").layout
         if parameter_layout is not None:
             parameter_layout = self._compact_contract(parameter_layout, "parameter_layout").layout
-        return build_paired_bivector_action_plan(
-            self.algebra,
-            input_layout=input_layout,
-            output_layout=output_layout,
-            parameter_layout=parameter_layout,
+        key = self._action_plan_cache_key(
+            "paired_bivector_action",
+            2,
+            input_layout,
+            output_layout,
+            parameter_layout,
         )
+        plan = self._paired_bivector_action_plans.get(key)
+        if plan is None:
+            plan = build_paired_bivector_action_plan(
+                self.algebra,
+                input_layout=input_layout,
+                output_layout=output_layout,
+                parameter_layout=parameter_layout,
+            )
+            self._paired_bivector_action_plans[key] = plan
+        return plan
 
     def _product_cache_key(self, executor: FullTableProductExecutor | GradeProductExecutor) -> tuple[object, ...]:
         self._compact_contract(executor.left_layout, "left_layout")
@@ -588,19 +609,19 @@ class GradePlanner:
             self.spec,
             str(buffer.device),
             str(buffer.dtype),
-            getattr(executor, "executor_family", "sparse"),
+            self.algebra.planning_policy.fingerprint,
             executor.op,
             executor.left_grades,
             executor.right_grades,
             executor.output_grades,
         )
 
-    def _product_request_cache_key(self, request: ProductRequest, family: str) -> tuple[object, ...]:
+    def _product_request_cache_key(self, request: ProductRequest) -> tuple[object, ...]:
         return (
             request.spec,
             str(request.device),
             str(request.dtype),
-            family,
+            self.algebra.planning_policy.fingerprint,
             request.op,
             request.left_grades,
             request.right_grades,
@@ -617,7 +638,7 @@ class GradePlanner:
             dtype=request.dtype,
             device=request.device,
         )
-        return cost.executor_family
+        return cost.decision.route
 
     def _unary_cache_key(self, executor: GradeUnaryExecutor) -> tuple[object, ...]:
         self._compact_contract(executor.input_layout, "input_layout")
@@ -652,6 +673,7 @@ class GradePlanner:
             executor.input_layout.grades,
             executor.output_layout.grades,
         )
+
     def _bivector_exp_cache_key(self, executor: BivectorExpExecutor) -> tuple[object, ...]:
         self._compact_contract(executor.input_layout, "input_layout")
         self._compact_contract(executor.output_layout, "output_layout")
@@ -659,13 +681,12 @@ class GradePlanner:
             self.spec,
             str(executor.operator_eye.device),
             str(executor.operator_eye.dtype),
+            self.algebra.planning_policy.fingerprint,
             executor.op,
-            executor.executor_family,
             executor.spectral_max_planes,
             executor.spectral_tol_abs,
             executor.spectral_tol_rel,
             executor.spectral_dominant_rel,
-            executor.spectral_transition_n,
             executor.spectral_allow_degenerate,
             executor.spectral_allow_truncated_degenerate,
             executor.input_layout.grades,
@@ -680,6 +701,27 @@ class GradePlanner:
             str(executor.left_sign_t.dtype),
             executor.op,
             executor.layout.grades,
+        )
+
+    def _action_plan_cache_key(
+        self,
+        family: str,
+        grade: int,
+        input_layout: GradeLayout,
+        output_layout: GradeLayout | None,
+        parameter_layout: GradeLayout | None,
+    ) -> tuple[object, ...]:
+        return (
+            self.spec,
+            str(self.algebra.device),
+            str(self.algebra.dtype),
+            self.algebra.planning_policy.fingerprint,
+            self.algebra.bivector_exp_options,
+            family,
+            grade,
+            input_layout.grades,
+            None if output_layout is None else output_layout.grades,
+            None if parameter_layout is None else parameter_layout.grades,
         )
 
     def _default_operand_grades(self, grades, layout: GradeLayout = None):

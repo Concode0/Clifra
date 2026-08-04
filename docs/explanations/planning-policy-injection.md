@@ -1,154 +1,273 @@
-# Planning Policy as Dependency Injection
+# Planning Policies
 
-The algebra defines which products are mathematically valid. Memory budgets,
-plan rejection thresholds, and backend-specific executor choices are
-operational decisions, so clifra receives them as injected policy.
+Clifra chooses execution routes during static planning. The choice depends on
+the algebra specification, declared layouts, dtype, device, numerical options,
+and the injected planning policy. Tensor values and runtime batch dimensions do
+not participate in route selection.
 
-## Inject policy when the algebra is constructed
+Each operation:
 
-Policies are created before the algebra and passed to `make_algebra`:
+1. validates its static contracts;
+2. enumerates the routes it implements;
+3. marks routes that cannot satisfy the request as unavailable;
+4. publishes facts for each available route;
+5. asks the policy to score or reject those routes;
+6. constructs and caches the selected plan.
+
+Capability checks remain part of the operation. A policy can prefer an
+implemented route, but it cannot make an unsupported route available.
+
+## Formula policies
+
+`FormulaPolicy` defines an acceptance region and score for each `(family,
+route)` pair. A finite score accepts a candidate, and the lowest score wins.
+Equal scores use the operation's candidate order.
+
+The following policy replaces the default product rules and leaves the other
+operation families unchanged:
 
 ```python
 import torch
 
-from clifra.core import BivectorExpExecutionPolicy, PlanningLimits, make_algebra
-from clifra.core.planning import ProductExecutionPolicy
+from clifra.core import (
+    DEFAULT_PLANNING_POLICY,
+    BoundaryRegion,
+    FormulaConstraint,
+    FormulaPolicy,
+    Polynomial,
+    ResourceLimits,
+    RouteRule,
+    make_algebra,
+)
 
-limits = PlanningLimits(
+non_product_rules = tuple(
+    rule for rule in DEFAULT_PLANNING_POLICY.rules
+    if rule.family != "product"
+)
+
+full_table_region = BoundaryRegion(
+    constraints=(
+        FormulaConstraint(
+            Polynomial.feature("layout.output_lanes", constant=-8_192.0),
+            reason="full_table_lane_boundary",
+        ),
+    ),
+    name="bounded_full_table",
+)
+
+policy = FormulaPolicy(
+    rules=(
+        *non_product_rules,
+        RouteRule(
+            "product",
+            "full_table",
+            regions=(full_table_region,),
+            score=Polynomial.feature("forward_work"),
+        ),
+        RouteRule(
+            "product",
+            "sparse",
+            score=Polynomial.feature("forward_work", coefficient=1.1),
+        ),
+    )
+)
+
+algebra = make_algebra(
+    10,
+    device="cpu",
+    dtype=torch.float32,
+    planning_policy=policy,
+    resource_limits=ResourceLimits(
+        max_lanes=8_192,
+        max_pairs=12_000_000,
+    ),
+)
+```
+
+A `FormulaConstraint` represents the inclusive inequality
+
+\[
+f(x_1, \ldots, x_n) \leq 0.
+\]
+
+Constraints within one `BoundaryRegion` are intersected. Multiple regions on a
+route form a union. Polynomial terms may use non-negative integer powers, so a
+boundary or score may be nonlinear.
+
+`FormulaPolicy` rejects a candidate when it has no matching rule. If no
+available candidate is accepted, planning raises `PolicyCoverageError`.
+
+## Resource limits
+
+`ResourceLimits` is separate from route policy. Lane and interaction limits are
+hard allocation boundaries rather than preferences, so a low route score cannot
+override them.
+
+```python
+limits = ResourceLimits(
     warn_lanes=4_096,
     max_lanes=8_192,
     warn_pairs=2_000_000,
     max_pairs=12_000_000,
 )
-
-product_policy = ProductExecutionPolicy(
-    cpu_full_table_pair_weight=0.9,
-    cpu_sparse_pair_weight=1.4,
-)
-
-exp_policy = BivectorExpExecutionPolicy(
-    spectral_transition_n=10,
-    spectral_max_planes=4,
-)
-
-algebra = make_algebra(
-    10,
-    0,
-    device="cpu",
-    dtype=torch.float32,
-    planning_limits=limits,
-    product_execution_policy=product_policy,
-    bivector_exp_execution_policy=exp_policy,
-)
 ```
-
-The algebra host stores these objects. Layout validation, planners, and layers
-created from that host use the same policies. `AlgebraConfig` and
-`make_algebra_from_config` provide the same injection points for configuration-
-driven applications.
-
-Injection has three consequences:
-
-- two algebras in one process can use different budgets and cost models;
-- tests or analysis can use strict limits without changing global state;
-- the policy that produced a plan can be kept with the experiment configuration.
-
-Replacing a policy object leaves existing plans unchanged. Constructing the
-policy first makes it clear which policy produced each plan.
-
-## `PlanningLimits`: reject static costs before allocation
-
-`PlanningLimits` contains warning and hard thresholds for lane widths and
-bilinear interaction counts. The defaults are:
-
-| Limit | Default |
-| --- | ---: |
-| `warn_lanes` | 2,048 |
-| `max_lanes` | 4,096 |
-| `warn_pairs` | 1,000,000 |
-| `max_pairs` | 8,000,000 |
-
-Warnings begin at the warning threshold and are emitted once for an equivalent
-static cost. A value above a maximum raises an error before broad executor data
-is materialized.
 
 ![Canonical, vector, and vector-plus-bivector lane growth across algebra dimensions](../assets/explanations/planning-lane-growth.png)
 
-Lane and pair limits protect different resources. A layout may be narrow while
-a product of two such layouts creates many candidate interactions. Conversely,
-a broad output layout may be expensive to store even when relatively few pairs
-contribute to it.
+Lane width and interaction count protect different resources. A compact layout
+can still produce many candidate product interactions, while a broad output can
+be expensive to store even when relatively few pairs contribute. Canonical
+storage grows as \(2^n\), so removing a lane cap transfers responsibility for
+that allocation to the caller; it does not make the representation scale
+linearly.
 
-The preflight pair count is conservative. It can use the product of declared
-input widths to reject a request above the configured pair bound before constructing all
-basis interactions. The realized plan may contain fewer pairs after grade,
-projection, and metric-zero filtering.
+The preflight pair count is conservative. It may reject from declared input
+widths before constructing every basis interaction. Grade, projection, and
+metric-zero filtering can make the realized plan smaller.
 
-These limits regulate operational cost; mathematical validity is unchanged.
-Raising or removing them means that the caller accepts the resulting allocation
-and planning cost.
+The same `planning_policy` and `resource_limits` arguments are available through
+`AlgebraConfig`, `make_algebra`, and `make_algebra_from_config`.
 
-## `ProductExecutionPolicy`: choose an executor by a static score
+## Route facts
 
-Clifra has two product executor families:
+Every candidate carries an immutable `PlanFacts` value. The common facts have
+the same meaning across operation families.
 
-- the sparse grade-planned executor, which stores only selected interactions;
-- the full-table executor, available only when both inputs and the output are
-  all-grade layouts and the full lane count is within its configured cap.
+| Fact | Meaning |
+| --- | --- |
+| `forward_work` | Relative forward work |
+| `backward_work` | Relative backward work |
+| `peak_bytes` | Estimated peak temporary storage |
+| `compile_work` | Relative graph and construction complexity |
+| `quality_exact` | The route provides the operation's exact semantic guarantee |
+| `quality_truncated` | The route may apply a declared static truncation |
+| `quality_unknown` | No exact or specific truncation guarantee is available |
+| `quality_value_dependent` | Approximation quality can depend on tensor values |
+| `error_bound_known` | The route publishes a finite error bound |
+| `error_bound` | The published error bound, or zero when no bound is known |
 
-For a declared request, planning first builds a grade-path tree. It then
-estimates pair counts and buffer bytes for both eligible families. In simplified
-form, each score is:
+Sequential forward, backward, and compilation work are normally additive. Peak
+storage depends on temporary lifetimes and is not generally additive. Exactness
+requires every relevant child route to be exact; truncation propagates when any
+child route truncates.
 
-\[
-S = w_p N_{\mathrm{pairs}} + w_g N_{\mathrm{paths}}
-  + w_o N_{\mathrm{output}}
-  + w_m \frac{B_{\mathrm{estimated}}}{B_{\mathrm{unit}}}.
-\]
+`error_bound` is reserved for a finite upper bound on total route error. A
+composition may publish it when the operation has a valid propagation rule. If
+only the dominant source is understood, publish its bound or comparison signal
+as a qualified extension instead. For example, action planning carries
+`action.exp_rank_deficit` as a truncation proxy; it is useful for route ordering
+but is not presented as an output-error bound.
 
-The policy supplies separate weights for full-table and sparse execution on
-CPU, MPS, and the default backend group. The lower eligible score is selected.
-For non-full layouts, sparse execution is mandatory because a full table does
-not represent the declared compact contract.
+### Extension attributes
 
-The estimated buffers account for more than coefficient values. A full table
-uses canonical product indices and coefficients; a sparse plan stores left,
-right, output, and coefficient data for its realized interactions. The formula
-is intentionally static: it depends on layouts, signature, dtype, and device,
-not on the tensor values of a particular batch.
+Operation-specific facts use qualified extension names. They remain numeric so
+the same formula interface can read common and operation-specific facts.
 
-Executor policy changes the implementation of an operation, not its algebraic
-definition. Both exact product executors use the same basis-product signs and
-output projection.
+Examples include:
 
-## `BivectorExpExecutionPolicy`: select a numerical method
+- `algebra.n` and `algebra.r`;
+- `backend.cpu` and `backend.mps`;
+- `dtype.bytes`;
+- `layout.output_lanes`;
+- `product.pair_count` and `product.path_count`;
+- `exp.retained_rank` and `exp.rank_deficit`;
+- `action.exp_rank_deficit`;
+- application facts such as `vendor.machine_score`.
 
-Bivector exponentiation has a separate policy because its alternatives are not
-merely two storage strategies. The policy controls the transition to the
-spectral-local method, the maximum retained planes, numerical tolerances, and
-handling of degenerate signatures. Signature, dimension, dtype, and backend
-also constrain eligibility.
+Extension names must be dot-qualified. The defining operation or application
+also defines their units and meaning. A policy that depends on a specialized
+extension is portable only to candidates that publish that extension.
 
-Unlike exact product executor selection, a capped spectral-local route can be
-an approximation. Its policy must therefore be justified with angle-spectrum
-and drift analysis for the intended workload. Detailed constraints are covered
-in [Bivector Exponential Methods](bivector-exponential.md).
+A fact belongs in the common set only when several operation families share its
+meaning, units, and composition rule. Other facts should remain extensions.
+This keeps the common policy vocabulary stable without closing the set of facts
+available to new operators.
 
-## Defaults are presets, not learned decisions
+## Custom policies
 
-The default weights provide a usable starting policy without profiling a machine
-or fitting values during import. Automatic profiling would make algebra
-construction stateful, slow, and difficult to reproduce; a result measured on
-one batch or compiler may also be a poor policy for another workload.
+`PlanningPolicy` is a protocol. A custom policy does not need to inherit from a
+clifra base class.
 
-To tune a policy:
+```python
+from clifra.core import PolicyEvaluation
 
-1. Measure representative signatures, layouts, grades, dtypes, batches, and
-   devices with the benchmark suite.
-2. Compare the executor families or exponential routes relevant to the model.
-3. Adjust weights, caps, or limits to reflect those measurements.
-4. Inject the resulting immutable policy before constructing the algebra.
-5. Store it with the experiment or deployment configuration.
 
-The planner receives an operational decision model. The application owns its
-calibration and configuration.
+class MachinePolicy:
+    def __init__(self, work_scale: float):
+        self.work_scale = float(work_scale)
+
+    @property
+    def fingerprint(self):
+        return ("machine-policy-v1", self.work_scale)
+
+    def evaluate(self, candidate):
+        facts = candidate.facts
+        score = (
+            facts["forward_work"] * self.work_scale
+            + facts["compile_work"]
+            + facts["peak_bytes"] / 4096.0
+        )
+        return PolicyEvaluation(score, "eligible", "machine")
+```
+
+The fingerprint must be hashable and must include every policy setting that can
+change a decision. Policy evaluation must be deterministic for a fixed
+candidate. Runtime tensor values, randomness, clocks, and mutable global state
+must not affect it.
+
+Returning `PolicyEvaluation(None, reason)` rejects a candidate. Returning a
+finite score accepts it.
+
+## Adding a route or operation
+
+A policy selects among candidates; it does not provide an implementation. A new
+route must supply its executor or plan, capability checks, static facts, and
+cache inputs before a policy can select it.
+
+### PyTorch implementations
+
+An operation implemented directly with PyTorch tensor primitives must publish
+its own facts. Clifra cannot infer work, storage, or approximation guarantees
+from arbitrary tensor code.
+
+For each route:
+
+- construct `PlanFacts` from static contracts and options;
+- pass route-specific numeric facts through the `extensions` mapping;
+- state its exactness, truncation, and value dependence;
+- publish a total error bound only when its upper-bound interpretation is valid;
+- otherwise publish a clearly named operation-specific comparison proxy;
+- retain the selected facts as `route_facts` on the plan;
+- include every static input that can change the route in the plan cache key;
+- keep tensor values out of planning.
+
+The executor must still satisfy the declared layouts, dtype and device behavior,
+autograd requirements, and compilation contract.
+
+### Operations composed from clifra APIs
+
+Existing clifra calls plan and cache their own routes automatically. A function
+that calls a product followed by a bivector exponential therefore receives the
+selected child implementations without defining a new policy family.
+
+Clifra does not automatically combine those child facts into a parent cost. A
+parent planner must compose them explicitly when it:
+
+- compares more than one implementation of the composition;
+- applies an aggregate resource budget;
+- exposes an inspectable parent plan.
+
+Action planning follows this pattern for its exponential and product children.
+`AnalysisComposition` provides the corresponding structure for analysis
+reports. Parent peak storage and error bounds must follow the actual lifetime
+and numerical behavior of the composition rather than a generic sum.
+
+## Caching
+
+Product and bivector-exponential executors and policy-selected action plans are
+cached with the policy fingerprint and their static request data. Device or
+dtype moves clear policy-dependent caches before replanning.
+
+Changing policy behavior without changing its fingerprint can reuse a plan
+selected under the old behavior. Machine-specific calibration captured by a
+policy must therefore be part of its fingerprint.

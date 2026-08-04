@@ -24,7 +24,9 @@ from .commutator import CommutatorAnalyzer
 from .dimension import CovarianceDimensionAnalyzer
 from .pipeline import GeometricAnalyzer
 from .policy import (
-    AnalysisCostPolicy,
+    AnalysisBudget,
+    AnalysisComponent,
+    AnalysisComposition,
     AnalysisFeasibility,
     MatrixAnalysisCost,
     ProductAnalysisCost,
@@ -47,7 +49,9 @@ __all__ = [
     "TransformationDiagnosticsResult",
     "CommutatorResult",
     "AnalysisReport",
-    "AnalysisCostPolicy",
+    "AnalysisBudget",
+    "AnalysisComponent",
+    "AnalysisComposition",
     "AnalysisFeasibility",
     "MatrixAnalysisCost",
     "ProductAnalysisCost",
