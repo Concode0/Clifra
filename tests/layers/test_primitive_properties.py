@@ -34,7 +34,41 @@ from tests.helpers.hypothesis_cases import (
 )
 from tests.helpers.small_oracle import SmallCliffordOracle
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.property]
+
+
+@st.composite
+def _degenerate_signatures(draw, *, min_n=2, max_n=4):
+    n = draw(st.integers(min_n, max_n))
+    r = draw(st.integers(1, n - 1))
+    p = draw(st.integers(0, n - r))
+    return p, n - r - p, r
+
+
+def _oracle_rotor_action(algebra, oracle, values, weights, layout):
+    bivector_layout = algebra.layout((2,))
+    even_layout = algebra.layout(range(0, algebra.n + 1, 2))
+    rotor = even_layout.full(
+        algebra.bivector_exp(-0.5 * weights, input_layout=bivector_layout, output_layout=even_layout)
+    )
+    full_values = layout.full(values)
+    transformed = oracle.product(oracle.product(rotor, full_values), oracle.reverse(rotor))
+    return layout.compact(transformed)
+
+
+def _oracle_reflection_action(algebra, oracle, values, weights, layout):
+    signature_norm = oracle.signature_norm_squared(weights, layout.basis_indices)
+    scale = signature_norm.abs().clamp_min(torch.finfo(weights.dtype).eps).sqrt()
+    versor = weights / scale
+    full_values = layout.full(values)
+    transformed = oracle.versor_product(
+        versor,
+        full_values,
+        versor_indices=layout.basis_indices,
+        input_indices=oracle.full_indices,
+        output_indices=oracle.full_indices,
+    )
+    return layout.compact(transformed)
 
 
 @PROPERTY_SETTINGS
@@ -255,6 +289,63 @@ def test_reflection_layer_matches_small_oracle_normalized_vector_action(n, data)
     expected = vector_layout.compact(expected_full)
 
     assert torch.allclose(actual, expected, atol=1e-9, rtol=1e-9)
+
+
+@QUICK_PROPERTY_SETTINGS
+@given(signature=_degenerate_signatures(), data=st.data())
+def test_versor_layer_mixed_null_forward_and_vjp_match_independent_action(signature, data):
+    algebra = AlgebraContext(*signature, device="cpu", dtype=torch.float64)
+    oracle = SmallCliffordOracle(*signature)
+    layout = algebra.layout((1,))
+    batch = data.draw(st.integers(1, 2))
+    channels = data.draw(st.integers(1, 3))
+    raw_values = data.draw(tensor_with_shape((batch, channels, layout.dim)))
+    raw_weights = 0.1 * data.draw(tensor_with_shape((channels, algebra.layout((2,)).dim)))
+    layer = VersorLayer(algebra, channels, input_layout=layout).to(dtype=torch.float64)
+    with torch.no_grad():
+        layer.grade_weights.copy_(raw_weights)
+    values = raw_values.clone().requires_grad_(True)
+    reference_values = raw_values.clone().requires_grad_(True)
+    reference_weights = raw_weights.clone().requires_grad_(True)
+
+    actual = layer(values)
+    expected = _oracle_rotor_action(algebra, oracle, reference_values, reference_weights, layout)
+    cotangent = torch.linspace(0.5, 1.5, actual.numel(), dtype=torch.float64).reshape_as(actual)
+    actual_vjp = torch.autograd.grad(actual, (values, layer.grade_weights), cotangent)
+    expected_vjp = torch.autograd.grad(expected, (reference_values, reference_weights), cotangent)
+
+    assert torch.allclose(actual, expected, atol=1e-9, rtol=1e-9)
+    assert torch.allclose(actual_vjp[0], expected_vjp[0], atol=1e-8, rtol=1e-8)
+    assert torch.allclose(actual_vjp[1], expected_vjp[1], atol=1e-8, rtol=1e-8)
+
+
+@QUICK_PROPERTY_SETTINGS
+@given(signature=_degenerate_signatures(), data=st.data())
+def test_reflection_layer_mixed_null_forward_and_vjp_match_independent_action(signature, data):
+    algebra = AlgebraContext(*signature, device="cpu", dtype=torch.float64)
+    oracle = SmallCliffordOracle(*signature)
+    layout = algebra.layout((1,))
+    batch = data.draw(st.integers(1, 2))
+    channels = data.draw(st.integers(1, 3))
+    raw_values = data.draw(tensor_with_shape((batch, channels, layout.dim)))
+    raw_weights = data.draw(tensor_with_shape((channels, layout.dim)))
+    raw_weights[:, 0] += 3.0
+    layer = ReflectionLayer(algebra, channels, input_layout=layout).to(dtype=torch.float64)
+    with torch.no_grad():
+        layer.vector_weights.copy_(raw_weights)
+    values = raw_values.clone().requires_grad_(True)
+    reference_values = raw_values.clone().requires_grad_(True)
+    reference_weights = raw_weights.clone().requires_grad_(True)
+
+    actual = layer(values)
+    expected = _oracle_reflection_action(algebra, oracle, reference_values, reference_weights, layout)
+    cotangent = torch.linspace(0.5, 1.5, actual.numel(), dtype=torch.float64).reshape_as(actual)
+    actual_vjp = torch.autograd.grad(actual, (values, layer.vector_weights), cotangent)
+    expected_vjp = torch.autograd.grad(expected, (reference_values, reference_weights), cotangent)
+
+    assert torch.allclose(actual, expected, atol=1e-9, rtol=1e-9)
+    assert torch.allclose(actual_vjp[0], expected_vjp[0], atol=1e-8, rtol=1e-8)
+    assert torch.allclose(actual_vjp[1], expected_vjp[1], atol=1e-8, rtol=1e-8)
 
 
 @QUICK_PROPERTY_SETTINGS

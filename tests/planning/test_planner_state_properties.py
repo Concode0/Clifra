@@ -1,0 +1,124 @@
+# clifra (C) 2026 Eunkyum Kim
+# SPDX-License-Identifier: Apache-2.0
+
+from __future__ import annotations
+
+import pytest
+import torch
+from hypothesis import given
+from hypothesis import strategies as st
+
+from clifra.core.runtime.algebra import AlgebraContext
+from tests.helpers.hypothesis_cases import QUICK_PROPERTY_SETTINGS, signature_strategy
+
+pytestmark = [pytest.mark.unit, pytest.mark.property]
+
+_CACHE_NAMES = (
+    "_product_executors",
+    "_unary_executors",
+    "_signature_norm_squared_executors",
+    "_pseudoscalar_product_executors",
+    "_bivector_exp_executors",
+    "_full_sandwich_action_executors",
+    "_versor_action_plans",
+    "_paired_bivector_action_plans",
+    "_bivector_signs_cache",
+)
+_ACTIONS = (
+    "product_gp",
+    "product_wedge",
+    "unary_reverse",
+    "unary_conjugate",
+    "signature_norm",
+    "pseudoscalar",
+    "bivector_exp",
+    "versor_action",
+    "paired_action",
+    "clear",
+)
+
+
+def _cache_snapshot(planner):
+    return tuple(tuple(getattr(planner, name).items()) for name in _CACHE_NAMES)
+
+
+def _plan(algebra, action: str):
+    vector = algebra.layout((1,))
+    bivector = algebra.layout((2,))
+    if action == "product_gp":
+        return algebra.plan_product(
+            op="gp",
+            left_layout=vector,
+            right_layout=vector,
+            output_layout=algebra.layout((0, 2)),
+        ).executor
+    if action == "product_wedge":
+        return algebra.plan_product(
+            op="wedge",
+            left_layout=vector,
+            right_layout=vector,
+            output_layout=bivector,
+        ).executor
+    if action == "unary_reverse":
+        return algebra.plan_unary(op="reverse", input_layout=algebra.layout((0, 1, 2))).executor
+    if action == "unary_conjugate":
+        return algebra.plan_unary(op="clifford_conjugation", input_layout=algebra.layout((0, 1, 2))).executor
+    if action == "signature_norm":
+        return algebra.plan_signature_norm_squared(input_layout=algebra.layout((0, 1, 2)))
+    if action == "pseudoscalar":
+        return algebra.plan_pseudoscalar_product(
+            input_layout=vector,
+            output_layout=algebra.layout((algebra.n - 1,)),
+        )
+    if action == "bivector_exp":
+        return algebra.plan_bivector_exp(
+            input_layout=bivector,
+            output_layout=algebra.layout(range(0, algebra.n + 1, 2)),
+        )
+    if action == "versor_action":
+        return algebra.planner.versor_action_plan(
+            grade=2,
+            input_layout=vector,
+            output_layout=vector,
+            parameter_layout=bivector,
+        )
+    return algebra.planner.paired_bivector_action_plan(
+        input_layout=vector,
+        output_layout=vector,
+        parameter_layout=bivector,
+    )
+
+
+@QUICK_PROPERTY_SETTINGS
+@given(
+    signature=signature_strategy(min_n=2, max_n=5),
+    actions=st.lists(st.sampled_from(_ACTIONS), min_size=1, max_size=24),
+)
+def test_generated_planner_sequences_preserve_cache_identity_and_validation(signature, actions):
+    algebra = AlgebraContext(*signature, device="cpu", dtype=torch.float32)
+    planned = {}
+
+    for action in actions:
+        if action == "clear":
+            algebra.planner.clear_cache()
+            planned.clear()
+            assert all(not getattr(algebra.planner, name) for name in _CACHE_NAMES)
+            continue
+
+        result = _plan(algebra, action)
+        if action in planned:
+            assert result is planned[action]
+        else:
+            planned[action] = result
+
+    before = _cache_snapshot(algebra.planner)
+    n = sum(signature)
+    foreign_signature = (0, n, 0) if signature == (n, 0, 0) else (n, 0, 0)
+    foreign = AlgebraContext(*foreign_signature, device="cpu", dtype=torch.float32)
+    with pytest.raises(ValueError, match="left_layout signature .* does not match algebra signature"):
+        algebra.plan_product(
+            left_layout=foreign.layout((1,)),
+            right_layout=foreign.layout((1,)),
+            output_layout=foreign.layout((0, 2)),
+        )
+    assert _cache_snapshot(algebra.planner) == before

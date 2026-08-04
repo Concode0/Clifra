@@ -16,7 +16,7 @@ from clifra.layers.blocks.attention import EntropyGatedAttention, GeometricProdu
 from tests.helpers.hypothesis_cases import QUICK_PROPERTY_SETTINGS, tensor_with_shape
 from tests.helpers.small_oracle import SmallCliffordOracle
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.property]
 
 
 def _oracle_attention_score(

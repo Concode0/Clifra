@@ -16,7 +16,7 @@ from clifra.layers.adapters.projective import ProjectiveEmbedding
 from tests.helpers.hypothesis_cases import QUICK_PROPERTY_SETTINGS, tensor_with_shape
 from tests.helpers.small_oracle import SmallCliffordOracle
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.property]
 
 
 @QUICK_PROPERTY_SETTINGS
