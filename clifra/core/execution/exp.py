@@ -1520,10 +1520,19 @@ class BivectorExpExecutor(nn.Module):
         split_bivector_coeff = 0.5 * (s_plus + s_minus)
         split_bivector_grade4_coeff = (s_plus - s_minus) / (2.0 * split_mu)
 
+        complex_nu = torch.sqrt(torch.where(complex_mask, -grade4_square, ones))
         if self.stabilize_split_divided_differences:
             cosh_coalescing = split_mask & (split_mu <= self.cosh_divided_difference_limit)
             sinhc_coalescing = split_mask & (split_mu <= self.sinhc_divided_difference_limit)
-            center_mask = base_mask | cosh_coalescing | sinhc_coalescing
+            complex_cosh_coalescing = complex_mask & (complex_nu <= self.cosh_divided_difference_limit)
+            complex_sinhc_coalescing = complex_mask & (complex_nu <= self.sinhc_divided_difference_limit)
+            center_mask = (
+                base_mask
+                | cosh_coalescing
+                | sinhc_coalescing
+                | complex_cosh_coalescing
+                | complex_sinhc_coalescing
+            )
         else:
             center_mask = base_mask
         center_scalar = torch.where(center_mask, scalar_square, zeros)
@@ -1551,7 +1560,6 @@ class BivectorExpExecutor(nn.Module):
             )
 
         complex_scalar = torch.where(complex_mask, scalar_square, zeros)
-        complex_nu = torch.sqrt(torch.where(complex_mask, -grade4_square, ones))
         (
             complex_scalar_coeff,
             complex_bivector_coeff,
@@ -1561,6 +1569,17 @@ class BivectorExpExecutor(nn.Module):
             complex_scalar,
             complex_nu,
         )
+        if self.stabilize_split_divided_differences:
+            complex_grade4_coeff = torch.where(
+                complex_cosh_coalescing,
+                torch.addcmul(0.5 * center_bivector_coeff, grade4_square, cosh_correction),
+                complex_grade4_coeff,
+            )
+            complex_bivector_grade4_coeff = torch.where(
+                complex_sinhc_coalescing,
+                torch.addcmul(center_bivector_grade4_coeff, grade4_square, sinhc_correction),
+                complex_bivector_grade4_coeff,
+            )
 
         base_scalar_coeff = center_scalar_coeff
         base_bivector_coeff = center_bivector_coeff

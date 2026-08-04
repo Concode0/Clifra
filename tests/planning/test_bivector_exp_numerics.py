@@ -168,6 +168,36 @@ def test_bivector_exp_closed_biquadratic_resolves_coalescing_complex_roots(
     assert torch.allclose(actual, expected, atol=atol, rtol=atol)
 
 
+def test_bivector_exp_closed_biquadratic_coalescing_complex_vjp_matches_reference():
+    algebra = AlgebraContext(1, 3, 1, device=DEVICE, dtype=torch.float64)
+    bivector_layout = algebra.layout((2,))
+    even_layout = algebra.layout((0, 2, 4))
+    positions = {index: position for position, index in enumerate(bivector_layout.basis_indices)}
+    raw = torch.zeros(1, bivector_layout.dim, dtype=torch.float64)
+    raw[0, positions[3]] = 0.1
+    raw[0, positions[12]] = 1.0850786415217417e-13
+    raw[0, positions[24]] = 0.1
+    values = raw.clone().requires_grad_(True)
+    reference_values = raw.clone().requires_grad_(True)
+
+    actual = algebra.bivector_exp(values, input_layout=bivector_layout, output_layout=even_layout)
+    expected = bivector_exp_cpu_reference(
+        algebra,
+        reference_values,
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+    )
+    cotangent = torch.linspace(0.5, 1.5, actual.numel(), dtype=torch.float64).reshape_as(actual)
+
+    assert torch.allclose(actual, expected, atol=1e-14, rtol=1e-14)
+    assert torch.allclose(
+        torch.autograd.grad(actual, values, cotangent)[0],
+        torch.autograd.grad(expected, reference_values, cotangent)[0],
+        atol=1e-12,
+        rtol=1e-12,
+    )
+
+
 @pytest.mark.parametrize(
     ("dtype", "power_start", "power_stop", "atol"),
     [
