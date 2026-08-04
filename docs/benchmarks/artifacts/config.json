@@ -12,7 +12,7 @@
     }
   ],
   "output": {
-    "baseline": null,
+    "baseline": "docs/benchmarks/artifacts",
     "docs_root": "docs/benchmarks",
     "publish": true,
     "root": "benchmarks/results"

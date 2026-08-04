@@ -4,7 +4,7 @@ The suite measures eager forward, backward, startup, and cumulative behavior. `b
 
 ## Latest Published Run
 
-Run `20260714T022923.928479Z-4fa5b24ebc` on `macOS-26.5.2-arm64-arm-64bit` with PyTorch `2.10.0` and `5` Torch threads.
+Run `20260804T071703.997645Z-e8ca8b8652` on `macOS-26.5.2-arm64-arm-64bit` with PyTorch `2.10.0` and `5` Torch threads.
 
 - successful rows: `15882`
 - skipped cases: `0`
@@ -22,7 +22,7 @@ Run `20260714T022923.928479Z-4fa5b24ebc` on `macOS-26.5.2-arm64-arm-64bit` with 
 
 - Output finiteness: `15882/15882` rows contain only finite values.
 - Gradient finiteness: `15882/15882` measured gradients contain only finite values.
-- Timing stability: `31` rows have a forward IQR greater than 50% of their median. These are retained rather than silently filtered.
+- Timing stability: `44` rows have a forward IQR greater than 50% of their median. These are retained rather than silently filtered.
 - Repeated action, euclidean: median float32 maximum relative error after `512` steps is `3.506e-05`.
 - Repeated action, mixed: median float32 maximum relative error after `512` steps is `1.785e-05`.
 - Repeated action, degenerate: median float32 maximum relative error after `512` steps is `9.752e-06`.
@@ -78,5 +78,6 @@ See the [published configuration](artifacts/config.json) for the complete matrix
 - [Cumulative profiles (CSV)](artifacts/cumulative.csv)
 - [Events (JSONL)](artifacts/events.jsonl)
 - [Events (CSV)](artifacts/events.csv)
+- [Baseline comparison](artifacts/comparison.json)
 
 JSONL contains raw samples and complete measurement fields. CSV contains the same rows in tabular form.
