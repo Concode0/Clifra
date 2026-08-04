@@ -2,34 +2,41 @@ name: Tests
 
 on:
   push:
-    branches-ignore:
+    branches:
       - main
   pull_request:
     branches:
       - main
   schedule:
-    - cron: "0 3 * * *"   # nightly at 03:00 UTC
+    - cron: "0 3 * * 1"   # Mondays at 03:00 UTC
   workflow_dispatch:
     inputs:
-      suite:
-        description: "Test suite to run"
+      profile:
+        description: "Hypothesis verification profile"
         required: false
-        default: "not-slow"
+        default: "standard"
         type: choice
         options:
-          - unit
-          - not-slow
+          - standard
           - full
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  MKL_NUM_THREADS: 1
+  OMP_NUM_THREADS: 1
+  OPENBLAS_NUM_THREADS: 1
 
 jobs:
-  # ── Fast unit tests: runs on every push to non-main branches ──────────────
-  unit:
-    name: Unit tests (push)
+  tests:
+    name: Tests (${{ (github.event_name == 'schedule' || github.event.inputs.profile == 'full') && 'full' || 'standard' }})
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
+    timeout-minutes: 15
+    env:
+      HYPOTHESIS_PROFILE: ${{ (github.event_name == 'schedule' || github.event.inputs.profile == 'full') && 'full' || 'standard' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -45,84 +52,5 @@ jobs:
       - name: Install core + dev group
         run: uv sync --group dev
 
-      - name: Run unit tests
-        run: uv run --group dev pytest tests/ -m unit -q --tb=short
-
-  # ── PR gate: unit + non-slow tests ────────────────────────────────────────
-  pr-gate:
-    name: PR gate (not slow)
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: astral-sh/setup-uv@v4
-        with:
-          version: "latest"
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-
-      - name: Install core + dev group
-        run: uv sync --group dev
-
-      - name: Run non-slow tests
-        run: uv run --group dev pytest tests/ -m "not slow" -q --tb=short
-
-  # ── Nightly / manual: full suite ──────────────────────────────────────────
-  full:
-    name: Full suite (nightly / manual)
-    runs-on: ubuntu-latest
-    if: >
-      github.event_name == 'schedule' ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.suite == 'full')
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: astral-sh/setup-uv@v4
-        with:
-          version: "latest"
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-
-      - name: Install core + dev group
-        run: uv sync --group dev
-
-      - name: Run full test suite
-        run: uv run --group dev pytest tests/ -q --tb=short
-
-  # ── Manual override: run any suite on demand ──────────────────────────────
-  manual:
-    name: Manual (${{ github.event.inputs.suite }})
-    runs-on: ubuntu-latest
-    if: >
-      github.event_name == 'workflow_dispatch' &&
-      github.event.inputs.suite != 'full'
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: astral-sh/setup-uv@v4
-        with:
-          version: "latest"
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-
-      - name: Install core + dev group
-        run: uv sync --group dev
-
-      - name: Run ${{ github.event.inputs.suite }} tests
-        run: |
-          SUITE="${{ github.event.inputs.suite }}"
-          if [ "$SUITE" = "unit" ]; then
-            uv run --group dev pytest tests/ -m unit -q --tb=short
-          else
-            uv run --group dev pytest tests/ -m "not slow" -q --tb=short
-          fi
+      - name: Run tests
+        run: uv run --group dev pytest tests/ --hypothesis-profile="$HYPOTHESIS_PROFILE" -n 2 --durations=20 -q --tb=short
