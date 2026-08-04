@@ -1454,8 +1454,10 @@ class BivectorExpExecutor(nn.Module):
         return output + bivector_grade4 * bivector_grade4_coeff
 
     def _spectral_local(self, values: torch.Tensor) -> torch.Tensor:
-        return _spectral_local_forward_impl(
-            values,
+        zero = values.abs().amax(dim=-1, keepdim=True) == 0
+        seed = torch.linspace(0.01, 0.02, values.shape[-1], dtype=values.dtype, device=values.device)
+        spectral = _spectral_local_forward_impl(
+            torch.where(zero, seed, values),
             self.spectral_nondegenerate_generator_input_positions,
             self.spectral_nondegenerate_generator_row_positions,
             self.spectral_nondegenerate_generator_col_positions,
@@ -1492,6 +1494,8 @@ class BivectorExpExecutor(nn.Module):
             self.spectral_mixed_generator_col_positions,
             self.spectral_mixed_generator_coefficients,
         )
+        linear = self.output_scalar_mask + self.output_layout.convert(values, self.input_layout)
+        return torch.where(zero, linear, spectral)
 
     def _closed_biquadratic_coefficients(
         self,
