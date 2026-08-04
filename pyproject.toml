@@ -1,10 +1,11 @@
 [project]
 name = "clifra"
-version = "1.2.1"
+version = "1.3.0"
 description = "A PyTorch framework for Clifford geometric algebra deep learning"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { file = "LICENSE" }
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 authors = [
     { name = "Eunkyum Kim", email = "nemonanconcode@gmail.com" },
 ]
@@ -22,37 +23,27 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Scientific/Engineering :: Mathematics",
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "torch>=2.0.0",
-    "setuptools>=80.10.2",
+    "setuptools",
+    "torch>=2.4.0",
 ]
 
 [project.urls]
 Homepage = "https://github.com/Concode0/clifra"
 Repository = "https://github.com/Concode0/clifra"
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "hypothesis>=6.155.7",
     "pytest>=7.0.0",
     "pytest-xdist>=3.8.0",
     "ruff>=0.8.0",
 ]
-all = [
-    "clifra[dev]",
-]
-
-[build-system]
-requires = ["setuptools>=80.10.2"]
-build-backend = "setuptools.build_meta"
-
-[dependency-groups]
 benchmark = [
     "matplotlib>=3.9.0",
 ]
@@ -68,6 +59,13 @@ viz = [
     "numpy>=2.0.0",
     "vtk>=9.4.0",
 ]
+
+[build-system]
+requires = ["setuptools>=80.10.2"]
+build-backend = "setuptools.build_meta"
+
+[tool.uv]
+default-groups = []
 
 [tool.setuptools.packages.find]
 include = ["clifra*"]

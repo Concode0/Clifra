@@ -42,11 +42,11 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Install core + dev extras
-        run: uv sync --extra dev
+      - name: Install core + dev group
+        run: uv sync --group dev
 
       - name: Run unit tests
-        run: uv run pytest tests/ -m unit -q --tb=short
+        run: uv run --group dev pytest tests/ -m unit -q --tb=short
 
   # ── PR gate: unit + non-slow tests ────────────────────────────────────────
   pr-gate:
@@ -65,11 +65,11 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Install core + dev extras
-        run: uv sync --extra dev
+      - name: Install core + dev group
+        run: uv sync --group dev
 
       - name: Run non-slow tests
-        run: uv run pytest tests/ -m "not slow" -q --tb=short
+        run: uv run --group dev pytest tests/ -m "not slow" -q --tb=short
 
   # ── Nightly / manual: full suite ──────────────────────────────────────────
   full:
@@ -90,11 +90,11 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Install core + dev extras
-        run: uv sync --extra dev
+      - name: Install core + dev group
+        run: uv sync --group dev
 
       - name: Run full test suite
-        run: uv run pytest tests/ -q --tb=short
+        run: uv run --group dev pytest tests/ -q --tb=short
 
   # ── Manual override: run any suite on demand ──────────────────────────────
   manual:
@@ -115,14 +115,14 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Install core + dev extras
-        run: uv sync --extra dev
+      - name: Install core + dev group
+        run: uv sync --group dev
 
       - name: Run ${{ github.event.inputs.suite }} tests
         run: |
           SUITE="${{ github.event.inputs.suite }}"
           if [ "$SUITE" = "unit" ]; then
-            uv run pytest tests/ -m unit -q --tb=short
+            uv run --group dev pytest tests/ -m unit -q --tb=short
           else
-            uv run pytest tests/ -m "not slow" -q --tb=short
+            uv run --group dev pytest tests/ -m "not slow" -q --tb=short
           fi

@@ -2,7 +2,7 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.4+-ee4c2c.svg)](https://pytorch.org/)
 [![Docs](https://img.shields.io/badge/docs-MkDocs-brightgreen)](https://concode0.github.io/clifra/)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18939518.svg)](https://doi.org/10.5281/zenodo.18939518)
 
@@ -17,7 +17,12 @@ other library components reuse the same operations.
 
 ```bash
 uv sync
-uv sync --extra dev
+```
+
+Development:
+
+```bash
+uv sync --group dev
 ```
 
 Docs:
@@ -51,9 +56,9 @@ out = products(left, right)
 ## Checks
 
 ```bash
-uv run pytest tests/ -m unit -q --tb=short
-uv run pytest tests/ -m "not slow" -q --tb=short
-uv run ruff check .
+uv run --group dev pytest tests/ -m unit -q --tb=short
+uv run --group dev pytest tests/ -m "not slow" -q --tb=short
+uv run --group dev ruff check .
 uv run --group docs mkdocs build
 ```
 
@@ -112,7 +117,7 @@ Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
   author  = {Kim, Eunkyum},
   title   = {clifra: Clifford Algebra Layers for PyTorch},
   url     = {https://github.com/Concode0/clifra},
-  version = {1.2.1},
+  version = {1.3.0},
   year    = {2026},
   doi     = {10.5281/zenodo.18939518},
   license = {Apache-2.0}

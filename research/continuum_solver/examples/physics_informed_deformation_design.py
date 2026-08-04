@@ -784,34 +784,37 @@ def write_visualizations(
     cell_displacement_np = _tensor_grid_to_numpy(cell_displacement, np)
     cell_displacement_magnitude = np.linalg.norm(cell_displacement_np, axis=-1)
     cell_centers_np = _tensor_grid_to_numpy(_cell_centers(final_cpu), np)
+    point_data = {
+        "displacement": displacement_np,
+        "displacement_magnitude": np.linalg.norm(displacement_np, axis=-1),
+        "bivector_response": response_np,
+        "bivector_response_magnitude": np.linalg.norm(response_np, axis=-1),
+    }
+    cell_data = {
+        "cell_displacement": cell_displacement_np,
+        "cell_displacement_magnitude": cell_displacement_magnitude,
+        "cell_bivector_response": cell_response_np,
+        "cell_bivector_response_magnitude": cell_response_magnitude,
+        "jacobian": jacobian,
+        "axial_log_strain": log_sx.numpy(),
+        "transverse_log_strain": (0.5 * (log_sy + log_sz)).numpy(),
+        "volumetric_log_strain": (log_sx + log_sy + log_sz).numpy(),
+        "effective_poisson_ratio": poisson.numpy(),
+        "target_poisson_ratio": target_poisson.numpy(),
+        "poisson_error": (poisson - target_poisson).numpy(),
+        "strain_energy_density": energy_density.numpy(),
+        "first_piola_stress_norm": first_piola_norm.numpy(),
+        "equilibrium_residual": equilibrium_magnitude.numpy(),
+        "curl_magnitude": curl_magnitude,
+    }
+    glyph_data = {name.removeprefix("cell_"): values for name, values in cell_data.items()}
     grid = _vtk_hexahedral_grid(
         vtk,
         numpy_support,
         np,
         final_np,
-        point_data={
-            "displacement": displacement_np,
-            "displacement_magnitude": np.linalg.norm(displacement_np, axis=-1),
-            "bivector_response": response_np,
-            "bivector_response_magnitude": np.linalg.norm(response_np, axis=-1),
-        },
-        cell_data={
-            "cell_displacement": cell_displacement_np,
-            "cell_displacement_magnitude": cell_displacement_magnitude,
-            "cell_bivector_response": cell_response_np,
-            "cell_bivector_response_magnitude": cell_response_magnitude,
-            "jacobian": jacobian,
-            "axial_log_strain": log_sx.numpy(),
-            "transverse_log_strain": (0.5 * (log_sy + log_sz)).numpy(),
-            "volumetric_log_strain": (log_sx + log_sy + log_sz).numpy(),
-            "effective_poisson_ratio": poisson.numpy(),
-            "target_poisson_ratio": target_poisson.numpy(),
-            "poisson_error": (poisson - target_poisson).numpy(),
-            "strain_energy_density": energy_density.numpy(),
-            "first_piola_stress_norm": first_piola_norm.numpy(),
-            "equilibrium_residual": equilibrium_magnitude.numpy(),
-            "curl_magnitude": curl_magnitude,
-        },
+        point_data=point_data,
+        cell_data=cell_data,
     )
     _write_vtu(vtk, grid, vtk_grid_path)
     glyph_points = _vtk_glyph_points(
@@ -819,23 +822,7 @@ def write_visualizations(
         numpy_support,
         np,
         cell_centers_np,
-        point_data={
-            "bivector_response": cell_response_np,
-            "bivector_response_magnitude": cell_response_magnitude,
-            "displacement": cell_displacement_np,
-            "displacement_magnitude": cell_displacement_magnitude,
-            "jacobian": jacobian,
-            "axial_log_strain": log_sx.numpy(),
-            "transverse_log_strain": (0.5 * (log_sy + log_sz)).numpy(),
-            "volumetric_log_strain": (log_sx + log_sy + log_sz).numpy(),
-            "effective_poisson_ratio": poisson.numpy(),
-            "target_poisson_ratio": target_poisson.numpy(),
-            "poisson_error": (poisson - target_poisson).numpy(),
-            "strain_energy_density": energy_density.numpy(),
-            "first_piola_stress_norm": first_piola_norm.numpy(),
-            "equilibrium_residual": equilibrium_magnitude.numpy(),
-            "curl_magnitude": curl_magnitude,
-        },
+        point_data=glyph_data,
     )
     _write_vtp(vtk, glyph_points, glyph_points_path)
 
@@ -1019,6 +1006,24 @@ def _tensor_grid_to_numpy(tensor: torch.Tensor, np_module):
     return tensor.detach().cpu().to(torch.float64).contiguous().numpy().astype(np_module.float64, copy=False)
 
 
+def _add_vtk_arrays(numpy_support, np_module, attributes, data, shape, *, vectors: str, scalars: str) -> None:
+    for name, values in data.items():
+        values = np_module.asarray(values, dtype=np_module.float64)
+        if values.shape == shape:
+            flat = values.reshape(-1)
+        elif values.shape[:-1] == shape and values.shape[-1] in {2, 3}:
+            flat = values.reshape(-1, values.shape[-1])
+        else:
+            raise ValueError(f"VTK array {name!r} has shape {values.shape}, expected {shape} or {shape} + (2|3,)")
+        array = numpy_support.numpy_to_vtk(flat, deep=True)
+        array.SetName(str(name))
+        attributes.AddArray(array)
+        if name == vectors:
+            attributes.SetVectors(array)
+        elif name == scalars:
+            attributes.SetScalars(array)
+
+
 def _vtk_hexahedral_grid(vtk, numpy_support, np_module, grid_np, *, point_data, cell_data):
     depth, height, width = grid_np.shape[:3]
     point_shape = (depth, height, width)
@@ -1049,30 +1054,24 @@ def _vtk_hexahedral_grid(vtk, numpy_support, np_module, grid_np, *, point_data, 
                     hexahedron.GetPointIds().SetId(local_id, int(point_id))
                 unstructured.InsertNextCell(hexahedron.GetCellType(), hexahedron.GetPointIds())
 
-    for name, values in point_data.items():
-        value_array = np_module.asarray(values, dtype=np_module.float64)
-        if value_array.shape[:-1] == point_shape and value_array.shape[-1] in {2, 3}:
-            array = numpy_support.numpy_to_vtk(value_array.reshape(-1, value_array.shape[-1]), deep=True)
-        else:
-            array = numpy_support.numpy_to_vtk(value_array.reshape(-1), deep=True)
-        array.SetName(str(name))
-        unstructured.GetPointData().AddArray(array)
-        if name == "bivector_response":
-            unstructured.GetPointData().SetVectors(array)
-        elif name == "bivector_response_magnitude":
-            unstructured.GetPointData().SetScalars(array)
-    for name, values in cell_data.items():
-        value_array = np_module.asarray(values, dtype=np_module.float64)
-        if value_array.shape[:-1] == cell_shape and value_array.shape[-1] in {2, 3}:
-            array = numpy_support.numpy_to_vtk(value_array.reshape(-1, value_array.shape[-1]), deep=True)
-        else:
-            array = numpy_support.numpy_to_vtk(value_array.reshape(-1), deep=True)
-        array.SetName(str(name))
-        unstructured.GetCellData().AddArray(array)
-        if name == "cell_bivector_response":
-            unstructured.GetCellData().SetVectors(array)
-        elif name == "cell_bivector_response_magnitude":
-            unstructured.GetCellData().SetScalars(array)
+    _add_vtk_arrays(
+        numpy_support,
+        np_module,
+        unstructured.GetPointData(),
+        point_data,
+        point_shape,
+        vectors="bivector_response",
+        scalars="bivector_response_magnitude",
+    )
+    _add_vtk_arrays(
+        numpy_support,
+        np_module,
+        unstructured.GetCellData(),
+        cell_data,
+        cell_shape,
+        vectors="cell_bivector_response",
+        scalars="cell_bivector_response_magnitude",
+    )
     return unstructured
 
 
@@ -1091,18 +1090,15 @@ def _vtk_glyph_points(vtk, numpy_support, np_module, points_np, *, point_data):
         vertices.InsertNextCell(vertex)
     polydata.SetVerts(vertices)
 
-    for name, values in point_data.items():
-        value_array = np_module.asarray(values, dtype=np_module.float64)
-        if value_array.shape[:-1] == point_shape and value_array.shape[-1] in {2, 3}:
-            array = numpy_support.numpy_to_vtk(value_array.reshape(-1, value_array.shape[-1]), deep=True)
-        else:
-            array = numpy_support.numpy_to_vtk(value_array.reshape(-1), deep=True)
-        array.SetName(str(name))
-        polydata.GetPointData().AddArray(array)
-        if name == "bivector_response":
-            polydata.GetPointData().SetVectors(array)
-        elif name == "bivector_response_magnitude":
-            polydata.GetPointData().SetScalars(array)
+    _add_vtk_arrays(
+        numpy_support,
+        np_module,
+        polydata.GetPointData(),
+        point_data,
+        point_shape,
+        vectors="bivector_response",
+        scalars="bivector_response_magnitude",
+    )
     return polydata
 
 
