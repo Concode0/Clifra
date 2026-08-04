@@ -11,16 +11,34 @@ compact layout values are ``[..., L]``. Grade masks are ``[G, D]`` or
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 import torch
 
 
-def grade_masks(n_grades: int, dim: int, *, device=None) -> torch.Tensor:
-    """Return ``[G, D]`` or ``[G, L]`` boolean masks keyed by basis-blade grade."""
-    masks = torch.zeros(n_grades, dim, dtype=torch.bool, device=device)
-    for idx in range(dim):
-        grade = int(idx).bit_count()
+def grade_masks(
+    n_grades: int,
+    dim: int | None = None,
+    *,
+    basis_indices: Iterable[int] | None = None,
+    device=None,
+) -> torch.Tensor:
+    """Return boolean grade masks for canonical lanes or explicit compact basis indices."""
+    if basis_indices is None:
+        if dim is None:
+            raise ValueError("dim or basis_indices is required")
+        indices = tuple(range(int(dim)))
+    else:
+        indices = tuple(basis_indices)
+    if dim is None:
+        dim = len(indices)
+    if len(indices) != int(dim):
+        raise ValueError(f"basis_indices must contain {dim} entries, got {len(indices)}")
+    masks = torch.zeros(n_grades, int(dim), dtype=torch.bool, device=device)
+    for position, index in enumerate(indices):
+        grade = int(index).bit_count()
         if grade < n_grades:
-            masks[grade, idx] = True
+            masks[grade, position] = True
     return masks
 
 
@@ -49,7 +67,7 @@ def grade_energies(values: torch.Tensor, masks: torch.Tensor) -> dict[int, float
     energies = {}
     for grade in range(masks.shape[0]):
         components = values[..., masks[grade].to(device=values.device)]
-        energies[grade] = (components**2).mean().item()
+        energies[grade] = 0.0 if components.numel() == 0 else (components**2).mean().item()
     return energies
 
 
@@ -69,9 +87,14 @@ def cross_grade_coupling(values: torch.Tensor, masks: torch.Tensor) -> torch.Ten
     energies = []
     for grade in range(masks.shape[0]):
         components = values[..., masks[grade].to(device=values.device)]
-        energies.append((components**2).reshape(batch, -1).sum(dim=-1))
+        if components.numel() == 0:
+            energies.append(values.new_zeros(batch))
+        else:
+            energies.append((components**2).reshape(batch, -1).sum(dim=-1))
     stacked = torch.stack(energies, dim=0)
-    normalized = (stacked - stacked.mean(dim=1, keepdim=True)) / (stacked.std(dim=1, keepdim=True) + 1e-8)
+    normalized = (stacked - stacked.mean(dim=1, keepdim=True)) / (
+        stacked.std(dim=1, keepdim=True, unbiased=False) + 1e-8
+    )
     return (normalized @ normalized.t()) / batch
 
 

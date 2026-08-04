@@ -12,6 +12,7 @@ from typing import Optional
 
 import torch
 
+from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
 from clifra.core.foundation.module import CliffordModule
 from clifra.functional.orthogonality import (
     diagnostics,
@@ -38,11 +39,24 @@ class OrthogonalitySettings:
 class StrictOrthogonality(CliffordModule):
     """Enforce grade confinement by loss penalty or hard projection."""
 
-    def __init__(self, algebra, settings: Optional[OrthogonalitySettings] = None):
+    def __init__(
+        self,
+        algebra,
+        settings: Optional[OrthogonalitySettings] = None,
+        *,
+        layout: GradeLayout | None = None,
+    ):
         """Initialize target-grade confinement."""
         super().__init__(algebra)
         self.settings = OrthogonalitySettings() if settings is None else settings
-        masks = grade_masks(self.algebra.n + 1, self.algebra.dim)
+        if layout is not None and layout.spec != AlgebraSpec.from_algebra(algebra):
+            raise ValueError(
+                f"layout signature {layout.spec} does not match algebra signature {AlgebraSpec.from_algebra(algebra)}"
+            )
+        self.layout = layout
+        dim = self.algebra.dim if layout is None else layout.dim
+        basis_indices = None if layout is None else layout.basis_indices
+        masks = grade_masks(self.algebra.n + 1, dim, basis_indices=basis_indices)
         target_mask = target_mask_from_grades(masks, self.settings.target_grades)
         self.register_buffer("grade_masks_tensor", masks)
         self.register_buffer("target_mask", target_mask)
