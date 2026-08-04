@@ -199,6 +199,55 @@ def test_bivector_exp_closed_biquadratic_coalescing_complex_vjp_matches_referenc
 
 
 @pytest.mark.parametrize(
+    ("signature", "blades"),
+    [
+        ((2, 2, 0), (5, 10)),
+        ((3, 1, 0), (3, 12))
+    ],
+)
+@pytest.mark.parametrize(
+    "limit_name",
+    ["cosh_divided_difference_limit", "sinhc_divided_difference_limit"],
+)
+def test_bivector_exp_divided_difference_switch_matches_reference_through_third_derivative(
+    signature,
+    blades,
+    limit_name,
+):
+    algebra = AlgebraContext(*signature, device=DEVICE, dtype=torch.float64)
+    bivector_layout = algebra.layout((2,))
+    even_layout = algebra.layout((0, 2, 4))
+    executor = algebra.plan_bivector_exp(input_layout=bivector_layout, output_layout=even_layout)
+    positions = {index: position for position, index in enumerate(bivector_layout.basis_indices)}
+    base = torch.zeros(1, bivector_layout.dim, dtype=torch.float64)
+    direction = torch.zeros_like(base)
+    base[0, positions[blades[0]]] = 1.0
+    direction[0, positions[blades[1]]] = 1.0
+    cotangent = torch.linspace(0.5, 1.5, even_layout.dim, dtype=torch.float64).unsqueeze(0)
+    limit = getattr(executor, limit_name)
+
+    for factor in (1.0 - 2.0**-8, 1.0 + 2.0**-8):
+        parameter = torch.tensor(0.5 * limit * factor, dtype=torch.float64, requires_grad=True)
+        values = base + parameter * direction
+        actual = (executor(values) * cotangent).sum()
+        expected = (
+            bivector_exp_cpu_reference(
+                algebra,
+                values,
+                input_layout=bivector_layout,
+                output_layout=even_layout,
+            )
+            * cotangent
+        ).sum()
+
+        for order, atol in enumerate((1e-13, 1e-11, 2e-9, 1e-7)):
+            assert torch.allclose(actual, expected, atol=atol, rtol=atol)
+            if order < 3:
+                actual = torch.autograd.grad(actual, parameter, create_graph=True)[0]
+                expected = torch.autograd.grad(expected, parameter, create_graph=True)[0]
+
+
+@pytest.mark.parametrize(
     ("dtype", "power_start", "power_stop", "atol"),
     [
         (torch.float32, 3, 12, torch.finfo(torch.float32).eps),
