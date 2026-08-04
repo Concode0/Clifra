@@ -329,7 +329,9 @@ def test_reflection_layer_mixed_null_forward_and_vjp_match_independent_action(si
     channels = data.draw(st.integers(1, 3))
     raw_values = data.draw(tensor_with_shape((batch, channels, layout.dim)))
     raw_weights = data.draw(tensor_with_shape((channels, layout.dim)))
-    raw_weights[:, 0] += 3.0
+    metric_signs = raw_weights.new_tensor((1.0,) * algebra.p + (-1.0,) * algebra.q + (0.0,) * algebra.r)
+    remaining_norm = (raw_weights[:, 1:].square() * metric_signs[1:]).sum(dim=-1)
+    raw_weights[:, 0] = (remaining_norm.abs() + 1.0).sqrt()
     layer = ReflectionLayer(algebra, channels, input_layout=layout).to(dtype=torch.float64)
     with torch.no_grad():
         layer.vector_weights.copy_(raw_weights)

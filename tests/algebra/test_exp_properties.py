@@ -36,6 +36,32 @@ def _force_exp_route(route: str) -> FormulaPolicy:
     )
 
 
+@st.composite
+def _well_conditioned_spectral_bivectors(draw):
+    angles = torch.tensor(
+        [
+            draw(st.floats(0.05, 0.08, allow_nan=False, allow_infinity=False)),
+            draw(st.floats(0.12, 0.15, allow_nan=False, allow_infinity=False)),
+            draw(st.floats(0.20, 0.23, allow_nan=False, allow_infinity=False)),
+        ],
+        dtype=torch.float64,
+    )
+    generator = torch.zeros(6, 6, dtype=torch.float64)
+    for plane, angle in enumerate(angles):
+        x, y = 2 * plane, 2 * plane + 1
+        generator[y, x] = angle
+        generator[x, y] = -angle
+    rotation, _ = torch.linalg.qr(
+        torch.randn(6, 6, dtype=torch.float64, generator=torch.Generator().manual_seed(421))
+    )
+    generator = rotation @ generator @ rotation.T
+    pairs = sorted(((1 << i) | (1 << j), i, j) for i in range(6) for j in range(i + 1, 6))
+    return torch.tensor(
+        [generator[j, i] for _, i, j in pairs],
+        dtype=torch.float64,
+    ).unsqueeze(0)
+
+
 def _even_grade_sets(n: int) -> tuple[tuple[int, ...], ...]:
     grades = tuple(range(0, n + 1, 2))
     return tuple(tuple(selection) for size in range(1, len(grades) + 1) for selection in combinations(grades, size))
@@ -184,9 +210,10 @@ def test_forced_bivector_exp_routes_match_dense_reference_and_vjp(route, data):
     )
     input_layout = algebra.layout((2,))
     output_layout = algebra.layout(range(0, algebra.n + 1, 2))
-    raw = 0.1 * data.draw(tensor_with_shape((1, input_layout.dim)))
     if route == "spectral_local":
-        raw = raw + torch.linspace(0.011, 0.027, input_layout.dim, dtype=torch.float64)
+        raw = data.draw(_well_conditioned_spectral_bivectors())
+    else:
+        raw = 0.1 * data.draw(tensor_with_shape((1, input_layout.dim)))
     values = raw.clone().requires_grad_(True)
     reference_values = raw.clone().requires_grad_(True)
     executor = algebra.plan_bivector_exp(input_layout=input_layout, output_layout=output_layout)
