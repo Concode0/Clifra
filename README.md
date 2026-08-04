@@ -56,8 +56,8 @@ out = products(left, right)
 ## Checks
 
 ```bash
-uv run --group dev pytest tests/ -m unit -q --tb=short
-uv run --group dev pytest tests/ -m "not slow" -q --tb=short
+uv run --group dev pytest tests/ -n12 -q --tb=short
+uv run --group dev pytest tests/ --hypothesis-profile=full -n12 -q --tb=short
 uv run --group dev ruff check .
 uv run --group docs mkdocs build
 ```
