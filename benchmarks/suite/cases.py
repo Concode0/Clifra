@@ -9,21 +9,19 @@ from typing import Any, Iterable
 import torch
 
 from clifra import make_algebra
-from clifra.core import PlanningLimits
+from clifra.core import ResourceLimits
 from clifra.core.foundation.basis import expand_output_grades
 from clifra.core.planning.exp import select_bivector_exp_executor_family
-from clifra.core.planning.policy import ProductExecutionPolicy
 
 from .models import PreparedCase, ResourceConfig, SignatureSpec
 
 UNLOCKED_LIMIT = 1 << 62
-UNLOCKED_PLANNING_LIMITS = PlanningLimits(
+UNLOCKED_RESOURCE_LIMITS = ResourceLimits(
     warn_lanes=UNLOCKED_LIMIT,
     max_lanes=UNLOCKED_LIMIT,
     warn_pairs=UNLOCKED_LIMIT,
     max_pairs=UNLOCKED_LIMIT,
 )
-UNLOCKED_PRODUCT_POLICY = ProductExecutionPolicy(full_table_max_lanes=UNLOCKED_LIMIT)
 PRODUCT_KINDS = {
     "gp",
     "geometric_product",
@@ -50,7 +48,7 @@ class FeasibleCase:
 
 
 def make_benchmark_algebra(spec: SignatureSpec, *, device: str, dtype: torch.dtype):
-    """Construct an algebra with clifra planning limits unlocked."""
+    """Construct an algebra with clifra resource limits unlocked."""
 
     return make_algebra(
         spec.p,
@@ -58,8 +56,7 @@ def make_benchmark_algebra(spec: SignatureSpec, *, device: str, dtype: torch.dty
         spec.r,
         device=device,
         dtype=dtype,
-        planning_limits=UNLOCKED_PLANNING_LIMITS,
-        product_execution_policy=UNLOCKED_PRODUCT_POLICY,
+        resource_limits=UNLOCKED_RESOURCE_LIMITS,
     )
 
 
