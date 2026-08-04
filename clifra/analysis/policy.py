@@ -79,7 +79,7 @@ class MatrixAnalysisCost:
 
     @property
     def estimated_bytes(self) -> int:
-        return self.matrix_entries * _dtype_bytes(self.dtype)
+        return self.matrix_entries * (torch.finfo(self.dtype).bits // 8)
 
     @property
     def composition(self) -> AnalysisComposition:
@@ -240,7 +240,3 @@ def evaluate_product_cost(cost: ProductAnalysisCost) -> AnalysisFeasibility:
     if cost.pair_count > cost.max_pairs:
         return AnalysisFeasibility(False, "product_pair_cap", details)
     return AnalysisFeasibility(True, "ok", details)
-
-
-def _dtype_bytes(dtype: torch.dtype) -> int:
-    return torch.empty((), dtype=dtype).element_size()

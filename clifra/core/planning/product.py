@@ -69,7 +69,7 @@ def estimate_product_executor_cost(
         output_grades=output_layout.grades,
     )
     backend = _device_backend(device)
-    dtype_bytes = torch.empty((), dtype=dtype).element_size()
+    dtype_bytes = torch.finfo(dtype).bits // 8
     full_table_pairs = left_layout.dim * right_layout.dim
     sparse_pairs = tree.estimated_pairs
     full_table_bytes = full_table_pairs * (8 + dtype_bytes)

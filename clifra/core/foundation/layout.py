@@ -11,7 +11,12 @@ from typing import Iterable
 
 import torch
 
-from clifra.core.foundation.basis import basis_index_tuple_for_grades, basis_indices_tensor, normalize_grades
+from clifra.core.foundation.basis import (
+    basis_count_for_grades,
+    basis_index_tuple_for_grades,
+    basis_indices_tensor,
+    normalize_grades,
+)
 
 
 @dataclass(frozen=True)
@@ -56,11 +61,12 @@ class AlgebraSpec:
 
 @dataclass(frozen=True)
 class GradeLayout:
-    """Compact basis-lane layout for a fixed grade set."""
+    """Compact fixed-grade layout whose basis indices are lowered on demand."""
 
     spec: AlgebraSpec
     grades: tuple[int, ...]
-    _basis_indices: tuple[int, ...] = field(init=False, repr=False)
+    _dim: int = field(init=False, repr=False, compare=False)
+    _basis_indices: tuple[int, ...] | None = field(default=None, init=False, repr=False, compare=False)
     _indices_cache: dict[str, torch.Tensor] = field(default_factory=dict, init=False, repr=False, compare=False)
     _grade_index_cache: dict[str, torch.Tensor] = field(default_factory=dict, init=False, repr=False, compare=False)
     _conversion_cache: dict[tuple[AlgebraSpec, tuple[int, ...], str], tuple[torch.Tensor, torch.Tensor]] = field(
@@ -73,17 +79,21 @@ class GradeLayout:
     def __post_init__(self) -> None:
         grades = normalize_grades(self.grades, self.spec.n)
         object.__setattr__(self, "grades", grades)
-        object.__setattr__(self, "_basis_indices", basis_index_tuple_for_grades(self.spec.n, grades))
+        object.__setattr__(self, "_dim", basis_count_for_grades(self.spec.n, grades))
 
     @property
     def basis_indices(self) -> tuple[int, ...]:
         """Canonical basis indices represented by this compact layout."""
-        return self._basis_indices
+        indices = self._basis_indices
+        if indices is None:
+            indices = basis_index_tuple_for_grades(self.spec.n, self.grades)
+            object.__setattr__(self, "_basis_indices", indices)
+        return indices
 
     @property
     def dim(self) -> int:
         """Number of compact lanes."""
-        return len(self.basis_indices)
+        return self._dim
 
     @property
     def full_dim(self) -> int:

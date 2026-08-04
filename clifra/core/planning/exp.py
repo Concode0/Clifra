@@ -441,7 +441,7 @@ def select_bivector_exp_route(
 ) -> RouteDecision:
     """Enumerate bivector-exp implementations and apply the injected policy."""
     device_type = torch.device(device).type
-    dtype_bytes = torch.empty((), dtype=dtype).element_size()
+    dtype_bytes = torch.finfo(dtype).bits // 8
     even_lanes = 1 if spec.n == 0 else 1 << (spec.n - 1)
     output_lanes = 1 if output_layout is None else output_layout.dim
     retained_planes = preselection.max_planes

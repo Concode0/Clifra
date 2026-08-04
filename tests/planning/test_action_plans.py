@@ -70,6 +70,28 @@ def test_policy_selected_action_plans_are_cached_by_static_contract():
     assert len(algebra.planner._versor_action_plans) == 1
 
 
+def test_high_dimensional_action_route_selection_uses_only_static_layout_facts(monkeypatch):
+    algebra = AlgebraContext(24, 0, 1, device=DEVICE, dtype=torch.float64)
+    vector_layout = algebra.layout((1,))
+    bivector_layout = algebra.layout((2,))
+
+    def reject_materialization(*args, **kwargs):
+        raise AssertionError("route selection must not materialize basis data or tensors")
+
+    monkeypatch.setattr("clifra.core.foundation.layout.basis_index_tuple_for_grades", reject_materialization)
+    for factory in ("arange", "empty", "eye", "ones", "tensor", "zeros"):
+        monkeypatch.setattr(torch, factory, reject_materialization)
+
+    plan = algebra.planner.versor_action_plan(
+        grade=2,
+        input_layout=vector_layout,
+        output_layout=vector_layout,
+        parameter_layout=bivector_layout,
+    )
+
+    assert plan.execution_path == "vector_matrix"
+
+
 @pytest.mark.parametrize("route", ["plan_versor_action", "plan_multi_versor_action", "plan_paired_bivector_action"])
 @pytest.mark.parametrize("foreign_side", ["input", "output", "parameter"])
 def test_action_plans_reject_foreign_contracts_before_executor_construction(route, foreign_side):

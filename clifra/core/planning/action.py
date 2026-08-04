@@ -238,7 +238,7 @@ def build_paired_bivector_action_plan(
 def _action_extensions(algebra, *, input_layout, output_layout, parameter_layout, intermediate_lanes: int = 0):
     device_type = getattr(getattr(algebra, "device", None), "type", str(getattr(algebra, "device", "cpu")))
     dtype = getattr(algebra, "dtype", None)
-    dtype_bytes = 4 if dtype is None else torch.empty((), dtype=dtype).element_size()
+    dtype_bytes = 4 if dtype is None else torch.finfo(dtype).bits // 8
     return {
         **environment_extensions(algebra, device_type, dtype_bytes),
         "layout.input_lanes": input_layout.dim,
@@ -252,7 +252,7 @@ def _action_extensions(algebra, *, input_layout, output_layout, parameter_layout
 def _select_versor_action_route(algebra, *, grade, input_layout, output_layout, parameter_layout):
     full = input_layout.dim == algebra.dim and output_layout.dim == algebra.dim
     vector_to_vector = input_layout.grades == (1,) and output_layout.grades == (1,)
-    dtype_bytes = torch.empty((), dtype=algebra.dtype).element_size()
+    dtype_bytes = torch.finfo(algebra.dtype).bits // 8
     matrix_work = float(algebra.n**3 + input_layout.dim * output_layout.dim)
     rotor_facts = PlanFacts()
     exp_facts = PlanFacts()
@@ -330,7 +330,7 @@ def _select_paired_action_route(
     middle_layout,
 ):
     full = input_layout.dim == algebra.dim and output_layout.dim == algebra.dim
-    dtype_bytes = torch.empty((), dtype=algebra.dtype).element_size()
+    dtype_bytes = torch.finfo(algebra.dtype).bits // 8
     exp_facts = _bivector_exp_facts(algebra, parameter_layout, rotor_layout)
     left_facts = _product_facts(algebra, rotor_layout, input_layout, middle_layout)
     right_facts = _product_facts(algebra, middle_layout, rotor_layout, output_layout)

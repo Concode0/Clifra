@@ -19,10 +19,23 @@ from clifra.core.foundation.basis import (
     operation_coefficient,
     product_output_grades,
 )
+from clifra.core.foundation.layout import AlgebraSpec
 from clifra.core.runtime.algebra import AlgebraContext
 from tests.helpers.hypothesis_cases import PRODUCT_OPS, PROPERTY_SETTINGS, compact_multivector_cases, grade_sets
 
 pytestmark = pytest.mark.unit
+
+
+def test_grade_layout_defers_basis_enumeration_until_indices_are_requested():
+    layout = AlgebraSpec(24, 0, 1).layout(range(0, 26, 2))
+
+    assert layout.dim == 1 << 24
+    assert layout._basis_indices is None
+
+    small = AlgebraSpec(4).layout((0, 2))
+    assert small.dim == 7
+    assert small.basis_indices == (0, 3, 5, 6, 9, 10, 12)
+    assert small._basis_indices is small.basis_indices
 
 
 @PROPERTY_SETTINGS
