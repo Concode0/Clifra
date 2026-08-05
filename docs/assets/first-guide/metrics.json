@@ -1,55 +1,58 @@
 {
   "raw": {
+    "z": 0.122839
+  },
+  "aligned": {
     "z": 0.032819
   },
   "projected": {
-    "z": 0.000601,
-    "selector_deviation": 0.327933
+    "z": 0.001267,
+    "selector_deviation": 0.277118
   },
   "vector_gates": [
     1.0,
     1.0,
-    0.13528650999069214
+    0.19647890329360962
   ],
   "history_first": {
     "step": 0,
-    "loss": 0.033047039061784744,
-    "z": 0.033047039061784744,
+    "loss": 0.12115923315286636,
+    "z": 0.12115923315286636,
     "selector_deviation": 0.0,
     "weighted_selector_deviation": 0.0
   },
   "history_last": {
     "step": 239,
-    "loss": 0.000934284646064043,
-    "z": 0.000606764224357903,
-    "selector_deviation": 0.3275204300880432,
-    "weighted_selector_deviation": 0.0003275204508099705
+    "loss": 0.0015594230499118567,
+    "z": 0.0012827521422877908,
+    "selector_deviation": 0.2766708433628082,
+    "weighted_selector_deviation": 0.00027667084941640496
   },
   "noise": [
     {
       "noise": 0.0,
-      "z": 0.000601,
-      "selector_deviation": 0.327933
+      "z": 0.001267,
+      "selector_deviation": 0.277118
     },
     {
       "noise": 0.01,
-      "z": 0.000604,
-      "selector_deviation": 0.327933
+      "z": 0.001278,
+      "selector_deviation": 0.277118
     },
     {
       "noise": 0.05,
-      "z": 0.000644,
-      "selector_deviation": 0.327933
+      "z": 0.001372,
+      "selector_deviation": 0.277118
     },
     {
       "noise": 0.1,
-      "z": 0.000779,
-      "selector_deviation": 0.327933
+      "z": 0.001643,
+      "selector_deviation": 0.277118
     },
     {
       "noise": 0.2,
-      "z": 0.001331,
-      "selector_deviation": 0.327933
+      "z": 0.002841,
+      "selector_deviation": 0.277118
     }
   ]
 }

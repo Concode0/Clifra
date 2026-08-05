@@ -6,16 +6,18 @@ formula, model, loss, optimizer, robustness measurement, and surface plotting
 helper are included. Familiarity with PyTorch training loops is assumed; every
 clifra-specific object is introduced locally.
 
-The surface is a grid patch:
+The surface is a grid patch followed by a fixed global tilt of $0.55$ radians:
 
 ```text
-z = 0.5 * x * y
+z0 = 0.5 * x * y
+(x, y, z) = rotate_y(0.55) * (x, y, z0)
 ```
 
 The grade-2 `VersorLayer` learns a bivector, exponentiates it to a rotor, and
-applies the planned isometric action. `BladeSelector` then learns per-lane
-gates. The selector makes this model a projection rather than an invertible
-change of coordinates; a single global rotor cannot flatten a curved surface.
+applies the planned isometric action. It can recover the global orientation but
+cannot remove the remaining curvature. `BladeSelector` then learns per-lane
+gates, making the complete model a projection rather than an invertible change
+of coordinates.
 
 ![Sampled surface before projection](../assets/first-guide/manifold_original.png)
 
@@ -24,6 +26,8 @@ change of coordinates; a single global rotor cannot flatten a curved surface.
 ## Imports
 
 ```python
+import math
+
 import torch
 
 from clifra import make_algebra
@@ -36,16 +40,26 @@ from clifra.optimizers import make_riemannian_optimizer
 
 $Cl(3, 0)$ has eight canonical lanes. `embed_vector` places Cartesian coordinates
 in the grade-1 subspace; `GradeLayout.compact` retrieves them without encoding
-canonical lane positions in the example.
+canonical lane positions in the example. The fixed tilt gives the rotor a
+global orientation to recover before the selector removes residual height.
 
 ```python
 def sample_patch(algebra, n: int = 24) -> tuple[torch.Tensor, tuple[int, int]]:
     x = torch.linspace(-1.0, 1.0, n, device=algebra.device, dtype=algebra.dtype)
     y = torch.linspace(-1.0, 1.0, n, device=algebra.device, dtype=algebra.dtype)
     X, Y = torch.meshgrid(x, y, indexing="ij")
-    Z = 0.5 * X * Y
+    Z0 = 0.5 * X * Y
 
-    xyz = torch.stack((X.reshape(-1), Y.reshape(-1), Z.reshape(-1)), dim=-1)
+    tilt = 0.55
+    cos_tilt = math.cos(tilt)
+    sin_tilt = math.sin(tilt)
+    X_tilted = cos_tilt * X + sin_tilt * Z0
+    Z_tilted = -sin_tilt * X + cos_tilt * Z0
+
+    xyz = torch.stack(
+        (X_tilted.reshape(-1), Y.reshape(-1), Z_tilted.reshape(-1)),
+        dim=-1,
+    )
     return algebra.embed_vector(xyz).unsqueeze(1), (n, n)  # [N, C=1, 8]
 
 
@@ -142,7 +156,8 @@ for step in range(240):
     history.append({"step": step, **{key: float(value) for key, value in metrics.items()}})
 
 with torch.no_grad():
-    projected = model(data)
+    aligned = model.rotor(data)
+    projected = model.selector(aligned)
 ```
 
 ## Inspect
@@ -161,17 +176,24 @@ def measure(algebra, values, model=None):
 
 
 raw_metrics = measure(algebra, data)
+aligned_metrics = measure(algebra, aligned)
 projected_metrics = measure(algebra, projected, model)
 print("raw", raw_metrics)
+print("aligned", aligned_metrics)
 print("projected", projected_metrics)
 ```
 
 Representative run:
 
 ```text
-raw {'z': 0.032819}
-projected {'z': 0.000601, 'selector_deviation': 0.327933}
+raw {'z': 0.122839}
+aligned {'z': 0.032819}
+projected {'z': 0.001267, 'selector_deviation': 0.277118}
 ```
+
+The rotor removes the fixed tilt, reducing the height energy to that of the
+original saddle. The selector then attenuates the residual height that a single
+global rotation cannot remove.
 
 Inspect the learned gate in vector coordinates rather than indexing canonical
 lanes:
@@ -269,12 +291,12 @@ def plot_patch(algebra, values, grid_shape, title, path, bounds):
     plt.close(fig)
 
 
-bounds = shared_bounds(algebra, data, projected)
+bounds = shared_bounds(algebra, data, aligned, projected)
 plot_patch(
     algebra,
     data,
     grid_shape,
-    "Sampled surface",
+    "Tilted sampled surface",
     "surface-original.png",
     bounds,
 )
@@ -294,8 +316,8 @@ plot_patch(
 | --- | --- |
 | `make_algebra(3, 0)` | 3-D Euclidean Clifford algebra |
 | `algebra.embed_vector(xyz)` | Formula samples into full-lane multivectors |
-| `VersorLayer(..., grade=2)` | learned bivector and isometric rotor action |
-| `BladeSelector` | learned lane gate that supplies the projection step |
+| `VersorLayer(..., grade=2)` | learned bivector that recovers the global orientation |
+| `BladeSelector` | learned lane gate that suppresses residual curved height |
 | `coordinate_component(..., axis=2)` | z-energy pressure without a basis-lane literal |
 | `model.selector_penalty()` | selector-logit regularization toward pass-through |
 
