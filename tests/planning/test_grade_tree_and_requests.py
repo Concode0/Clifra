@@ -3,7 +3,6 @@
 
 from tests.planning._grade_plan_helpers import (
     AlgebraSpec,
-    GradeFlow,
     build_grade_plan_tree,
     build_product_request,
     build_unary_request,
@@ -93,19 +92,3 @@ def test_unary_request_infers_projection_layout_without_full_layout():
     assert request.input_grades == (1,)
     assert request.output_grades == (1,)
     assert request.input_uses_compact_storage
-
-
-def test_grade_flow_propagates_embedding_unary_product_and_merge():
-    spec = AlgebraSpec(8, 0, 0)
-    vector = GradeFlow.vector(spec)
-    scalar = GradeFlow.scalar(spec)
-
-    product = vector.product(vector)
-    projected = product.project((2,))
-    merged = scalar.merge(projected)
-
-    assert vector.grades == (1,)
-    assert vector.unary("reverse").grades == (1,)
-    assert product.grades == (0, 2)
-    assert projected.grades == (2,)
-    assert merged.grades == (0, 2)

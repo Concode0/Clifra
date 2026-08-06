@@ -9,8 +9,7 @@ import warnings
 from dataclasses import dataclass
 
 from clifra.core.foundation.basis import basis_count_for_grades, expand_output_grades, normalize_grades
-from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
-from clifra.core.runtime.tensors import resolve_contract
+from clifra.core.foundation.layout import AlgebraSpec
 
 
 @dataclass(frozen=True)
@@ -51,15 +50,6 @@ class _PlanCost:
 
 
 _WARNED_PLAN_COSTS: set[tuple[object, ...]] = set()
-
-
-def validate_layout_cost(algebra, layout: GradeLayout, *, role: str = "layout") -> GradeLayout:
-    layout = resolve_contract(algebra, layout=layout, name=role).layout
-    validate_plan_cost(
-        algebra,
-        _PlanCost(spec=layout.spec, kind="layout", op=role, output_lanes=layout.dim, output_grades=layout.grades),
-    )
-    return layout
 
 
 def validate_grades_cost(algebra, spec: AlgebraSpec, grades, *, role: str = "layout") -> tuple[int, ...]:

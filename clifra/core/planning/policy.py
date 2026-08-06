@@ -9,7 +9,7 @@ import math
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Hashable, Protocol
+from typing import Protocol
 
 _COMMON_FACT_NAMES = frozenset(
     {
@@ -19,10 +19,7 @@ _COMMON_FACT_NAMES = frozenset(
         "compile_work",
         "quality_exact",
         "quality_truncated",
-        "quality_unknown",
         "quality_value_dependent",
-        "error_bound_known",
-        "error_bound",
     }
 )
 _COMMON_FACT_ORDER = tuple(sorted(_COMMON_FACT_NAMES))
@@ -40,7 +37,7 @@ def _qualified(name: str) -> str:
     parts = name.split(".")
     if len(parts) < 2 or any(not part.isidentifier() for part in parts):
         raise ValueError(
-            f"extension attribute {name!r} must be a dot-qualified identifier, for example 'product.pair_count'"
+            f"extension attribute {name!r} must be a dot-qualified identifier, for example 'vendor.machine_score'"
         )
     return name
 
@@ -67,7 +64,6 @@ class PlanFacts(Mapping[str, float]):
     exact: bool = True
     truncated: bool = False
     value_dependent: bool = False
-    error_bound: float | None = None
     extensions: Mapping[str, float] | Iterable[tuple[str, float]] = ()
 
     def __post_init__(self) -> None:
@@ -84,11 +80,6 @@ class PlanFacts(Mapping[str, float]):
             raise ValueError("a route cannot be both exact and truncated")
         if self.exact and self.value_dependent:
             raise ValueError("an exact guarantee cannot be value-dependent")
-        if self.error_bound is not None:
-            bound = _finite(self.error_bound, "error_bound")
-            if bound < 0.0:
-                raise ValueError("planning fact 'error_bound' must be non-negative")
-            object.__setattr__(self, "error_bound", bound)
         object.__setattr__(self, "extensions", _normalize_extensions(self.extensions))
 
     def __getitem__(self, name: str) -> float:
@@ -104,14 +95,8 @@ class PlanFacts(Mapping[str, float]):
             return float(self.exact)
         if name == "quality_truncated":
             return float(self.truncated)
-        if name == "quality_unknown":
-            return float(not self.exact and not self.truncated)
         if name == "quality_value_dependent":
             return float(self.value_dependent)
-        if name == "error_bound_known":
-            return float(self.error_bound is not None)
-        if name == "error_bound":
-            return 0.0 if self.error_bound is None else self.error_bound
         for key, value in self.extensions:
             if key == name:
                 return value
@@ -141,7 +126,6 @@ def environment_extensions(spec, backend: str, dtype_bytes: int) -> dict[str, fl
 def compose_plan_facts(
     *parts: PlanFacts,
     peak_bytes: int = 0,
-    error_bound: float | None = None,
     extensions: Mapping[str, float] | Iterable[tuple[str, float]] = (),
 ) -> PlanFacts:
     """Compose sequential facts without guessing storage or error propagation."""
@@ -153,7 +137,6 @@ def compose_plan_facts(
         exact=all(part.exact for part in parts),
         truncated=any(part.truncated for part in parts),
         value_dependent=any(part.value_dependent for part in parts),
-        error_bound=error_bound,
         extensions=extensions,
     )
 
@@ -180,7 +163,6 @@ class PolicyEvaluation:
 
     score: float | None
     reason: str = "rejected_by_policy"
-    region: str = ""
     details: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -194,9 +176,6 @@ class PolicyEvaluation:
 class PlanningPolicy(Protocol):
     """Structural DI contract for deterministic static route selection."""
 
-    @property
-    def fingerprint(self) -> Hashable: ...
-
     def evaluate(self, candidate: PlanCandidate) -> PolicyEvaluation: ...
 
 
@@ -205,9 +184,6 @@ class ScalarFormula(Protocol):
 
     @property
     def feature_names(self) -> frozenset[str]: ...
-
-    @property
-    def fingerprint(self) -> Hashable: ...
 
     def evaluate(self, facts: Mapping[str, float]) -> float: ...
 
@@ -267,10 +243,6 @@ class Polynomial:
     def feature_names(self) -> frozenset[str]:
         return frozenset(name for term in self.terms for name, _ in term.powers)
 
-    @property
-    def fingerprint(self) -> tuple[object, ...]:
-        return self.constant, tuple((term.coefficient, term.powers) for term in self.terms)
-
     def evaluate(self, facts: Mapping[str, float]) -> float:
         value = self.constant + sum(term.evaluate(facts) for term in self.terms)
         if not math.isfinite(value):
@@ -318,21 +290,6 @@ class RouteRule:
         object.__setattr__(self, "regions", tuple(self.regions))
 
 
-def _rule_fingerprint(rule: RouteRule) -> tuple[object, ...]:
-    return (
-        rule.family,
-        rule.route,
-        tuple(
-            (
-                region.name,
-                tuple((constraint.reason, constraint.formula.fingerprint) for constraint in region.constraints),
-            )
-            for region in rule.regions
-        ),
-        rule.score.fingerprint,
-    )
-
-
 @dataclass(frozen=True)
 class FormulaPolicy:
     """Declarative formula implementation of :class:`PlanningPolicy`."""
@@ -348,14 +305,9 @@ class FormulaPolicy:
             formulas = [rule.score]
             formulas.extend(constraint.formula for region in rule.regions for constraint in region.constraints)
             for formula in formulas:
-                hash(formula.fingerprint)
                 for name in formula.feature_names:
                     if name not in _COMMON_FACT_NAMES:
                         _qualified(name)
-
-    @property
-    def fingerprint(self) -> tuple[object, ...]:
-        return tuple(_rule_fingerprint(rule) for rule in self.rules)
 
     def evaluate(self, candidate: PlanCandidate) -> PolicyEvaluation:
         rule = next(
@@ -373,11 +325,7 @@ class FormulaPolicy:
                 if not accepted:
                     failures.append({"reason": constraint.reason, "value": value})
             if not failures:
-                return PolicyEvaluation(
-                    rule.score.evaluate(candidate.facts),
-                    "eligible",
-                    region.name,
-                )
+                return PolicyEvaluation(rule.score.evaluate(candidate.facts), "eligible")
             region_failures.append({"region": region.name, "failures": tuple(failures)})
         return PolicyEvaluation(
             None,
@@ -391,37 +339,33 @@ def _term(coefficient: float, **powers: int) -> PolynomialTerm:
 
 
 def _default_rules() -> tuple[RouteRule, ...]:
-    full_table_region = BoundaryRegion(
-        (FormulaConstraint(Polynomial.feature("layout.output_lanes", constant=-4096.0), "lane_boundary"),),
-        "bounded_full_table",
-    )
     full_table_score = Polynomial(
         terms=(
-            _term(1.0, **{"backend.cpu": 1, "product.pair_count": 1}),
+            _term(1.0, **{"backend.cpu": 1, "forward_work": 1}),
             _term(0.05, **{"backend.cpu": 1, "layout.output_lanes": 1}),
-            _term(1.2, **{"backend.mps": 1, "product.pair_count": 1}),
+            _term(1.2, **{"backend.mps": 1, "forward_work": 1}),
             _term(0.03, **{"backend.mps": 1, "layout.output_lanes": 1}),
-            _term(1.0, **{"backend.other": 1, "product.pair_count": 1}),
+            _term(1.0, **{"backend.other": 1, "forward_work": 1}),
             _term(0.05, **{"backend.other": 1, "layout.output_lanes": 1}),
-            _term(1.0, **{"product.memory_units": 1}),
+            _term(1.0 / 4096.0, peak_bytes=1),
         )
     )
     sparse_score = Polynomial(
         terms=(
-            _term(1.5, **{"backend.cpu": 1, "product.pair_count": 1}),
-            _term(5.0, **{"backend.cpu": 1, "product.path_count": 1}),
+            _term(1.5, **{"backend.cpu": 1, "forward_work": 1}),
+            _term(5.0, **{"backend.cpu": 1, "compile_work": 1}),
             _term(0.05, **{"backend.cpu": 1, "layout.output_lanes": 1}),
-            _term(0.9, **{"backend.mps": 1, "product.pair_count": 1}),
-            _term(1.0, **{"backend.mps": 1, "product.path_count": 1}),
+            _term(0.9, **{"backend.mps": 1, "forward_work": 1}),
+            _term(1.0, **{"backend.mps": 1, "compile_work": 1}),
             _term(0.03, **{"backend.mps": 1, "layout.output_lanes": 1}),
-            _term(1.25, **{"backend.other": 1, "product.pair_count": 1}),
-            _term(3.0, **{"backend.other": 1, "product.path_count": 1}),
+            _term(1.25, **{"backend.other": 1, "forward_work": 1}),
+            _term(3.0, **{"backend.other": 1, "compile_work": 1}),
             _term(0.05, **{"backend.other": 1, "layout.output_lanes": 1}),
-            _term(1.0, **{"product.memory_units": 1}),
+            _term(1.0 / 4096.0, peak_bytes=1),
         )
     )
     return (
-        RouteRule("product", "full_table", (full_table_region,), full_table_score),
+        RouteRule("product", "full_table", score=full_table_score),
         RouteRule("product", "sparse", score=sparse_score),
         RouteRule("bivector_exp", "closed_simple"),
         RouteRule("bivector_exp", "closed_biquadratic"),
@@ -444,16 +388,10 @@ DEFAULT_PLANNING_POLICY = FormulaPolicy(_default_rules())
 
 @dataclass(frozen=True)
 class RouteDecision:
-    """Selected route and inspectable policy diagnostics."""
+    """Selected route and the facts needed by composed planners."""
 
     route: str
-    score: float
-    matched_region: str
     facts: PlanFacts
-    candidates: tuple[Mapping[str, object], ...]
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "candidates", tuple(MappingProxyType(dict(row)) for row in self.candidates))
 
 
 class PolicyCoverageError(ValueError):
@@ -469,7 +407,7 @@ def select_policy_route(
     if len(keys) != len(set(keys)):
         raise ValueError("route candidates may contain only one candidate per family and route")
     diagnostics: list[Mapping[str, object]] = []
-    matches: list[tuple[float, int, PlanCandidate, str]] = []
+    matches: list[tuple[float, int, PlanCandidate]] = []
 
     for order, candidate in enumerate(candidates):
         if candidate.unavailable_reason is not None:
@@ -482,17 +420,7 @@ def select_policy_route(
             diagnostics.append({"route": candidate.route, "status": evaluation.reason, **dict(evaluation.details)})
             continue
         score = _finite(evaluation.score, f"score.{candidate.family}.{candidate.route}")
-        region = evaluation.region or "policy"
-        diagnostics.append(
-            {
-                "route": candidate.route,
-                "status": "eligible",
-                "score": score,
-                "region": region,
-                **dict(evaluation.details),
-            }
-        )
-        matches.append((score, order, candidate, region))
+        matches.append((score, order, candidate))
 
     if not matches:
         executable = [candidate.route for candidate in candidates if candidate.unavailable_reason is None]
@@ -508,5 +436,5 @@ def select_policy_route(
     for item in matches[1:]:
         if item[:2] < best[:2]:
             best = item
-    score, _, candidate, region = best
-    return RouteDecision(candidate.route, score, region, candidate.facts, tuple(diagnostics))
+    _, _, candidate = best
+    return RouteDecision(candidate.route, candidate.facts)

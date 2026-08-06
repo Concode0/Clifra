@@ -18,10 +18,10 @@ from tests.planning._grade_plan_helpers import (
     _product_method_name,
     _sparse_pairwise_product_reference,
     build_grade_product_plan,
-    estimate_product_executor_cost,
     expand_output_grades,
     make_algebra,
     pytest,
+    select_product_route,
     torch,
 )
 
@@ -336,7 +336,7 @@ def test_product_executor_policy_selects_sparse_for_pruned_full_layout_wedge():
     left = torch.randn(2, context.dim, dtype=torch.float64, generator=generator)
     right = torch.randn(2, context.dim, dtype=torch.float64, generator=generator)
 
-    cost = estimate_product_executor_cost(
+    decision = select_product_route(
         context,
         op="wedge",
         left_layout=full_layout,
@@ -355,9 +355,7 @@ def test_product_executor_policy_selects_sparse_for_pruned_full_layout_wedge():
         )
     )
 
-    assert cost.decision.route == "sparse"
-    scores = {row["route"]: row["score"] for row in cost.decision.candidates if row["status"] == "eligible"}
-    assert scores["sparse"] < scores["full_table"]
+    assert decision.route == "sparse"
     assert isinstance(executor, GradeProductExecutor)
     assert torch.allclose(context.wedge(left, right), oracle.product(left, right, op="wedge"), atol=1e-12, rtol=1e-12)
 
@@ -372,7 +370,7 @@ def test_product_executor_policy_override_can_force_full_table_full_layout_wedge
     context = AlgebraContext(6, 0, 0, device=DEVICE, dtype=torch.float64, planning_policy=policy)
     full_layout = context.layout()
 
-    cost = estimate_product_executor_cost(
+    decision = select_product_route(
         context,
         op="wedge",
         left_layout=full_layout,
@@ -391,9 +389,7 @@ def test_product_executor_policy_override_can_force_full_table_full_layout_wedge
         )
     )
 
-    assert cost.decision.route == "full_table"
-    scores = {row["route"]: row["score"] for row in cost.decision.candidates if row["status"] == "eligible"}
-    assert scores["full_table"] < scores["sparse"]
+    assert decision.route == "full_table"
     assert isinstance(executor, FullTableProductExecutor)
 
 
@@ -401,7 +397,7 @@ def test_product_executor_policy_uses_backend_coefficients_without_benchmark_row
     context = AlgebraContext(5, 0, 0, device=DEVICE, dtype=torch.float32)
     full_layout = context.layout()
 
-    cpu_cost = estimate_product_executor_cost(
+    cpu_decision = select_product_route(
         context,
         op="gp",
         left_layout=full_layout,
@@ -410,7 +406,7 @@ def test_product_executor_policy_uses_backend_coefficients_without_benchmark_row
         dtype=torch.float32,
         device="cpu",
     )
-    mps_cost = estimate_product_executor_cost(
+    mps_decision = select_product_route(
         context,
         op="gp",
         left_layout=full_layout,
@@ -420,8 +416,8 @@ def test_product_executor_policy_uses_backend_coefficients_without_benchmark_row
         device="mps",
     )
 
-    assert cpu_cost.decision.route == "full_table"
-    assert mps_cost.decision.route == "sparse"
+    assert cpu_decision.route == "full_table"
+    assert mps_decision.route == "sparse"
 
 
 def test_direct_product_executor_obeys_static_pair_limits():

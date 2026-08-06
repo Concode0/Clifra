@@ -26,7 +26,6 @@ from .exp import (
     spectral_exp_preselection,
     spectral_exp_uniform_tail_stress,
 )
-from .flow import GradeFlow
 from .layouts import ProductRequest, build_product_request
 from .metric import SignatureNormSquaredPlan, build_signature_norm_squared_plan
 from .permutation import PseudoscalarProductPlan, build_pseudoscalar_product_plan
@@ -50,14 +49,13 @@ from .product import (
     GradeProductPlan,
     build_full_table_product_plan,
     build_grade_product_plan,
-    estimate_product_executor_cost,
+    select_product_route,
 )
 from .resources import ResourceLimits
 from .tree import GradePathNode, GradePlanTree, build_grade_plan_tree
 from .unary import GradeUnaryOp, GradeUnaryPlan, UnaryRequest, build_unary_request
 
 __all__ = [
-    "GradeFlow",
     "GradePathNode",
     "GradeProductPlan",
     "FullTableProductPlan",
@@ -107,5 +105,5 @@ __all__ = [
     "build_pseudoscalar_product_plan",
     "build_product_request",
     "build_unary_request",
-    "estimate_product_executor_cost",
+    "select_product_route",
 ]

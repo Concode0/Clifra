@@ -17,7 +17,6 @@ from clifra.core.planning.policy import (
     Polynomial,
     PolynomialTerm,
     RouteRule,
-    compose_plan_facts,
     select_policy_route,
 )
 
@@ -110,21 +109,13 @@ def test_extension_facts_are_open_immutable_and_qualified():
         "sparse",
         PlanFacts(extensions={"vendor.machine_score": 3.0}),
     )
-    assert select_policy_route(policy, (candidate,)).score == 3.0
+    assert policy.evaluate(candidate).score == 3.0
+    assert select_policy_route(policy, (candidate,)).route == "sparse"
     with pytest.raises(TypeError):
         candidate.facts.extensions[0] = ("vendor.machine_score", 4.0)
 
     with pytest.raises(ValueError, match="dot-qualified"):
         Polynomial.feature("missing")
-
-
-def test_fact_composition_requires_an_explicit_error_bound():
-    approximate = PlanFacts(exact=False, error_bound=0.25)
-
-    assert compose_plan_facts(approximate, approximate).error_bound is None
-    assert compose_plan_facts(approximate, approximate, error_bound=0.5).error_bound == 0.5
-
-
 def test_module_apply_clears_policy_dependent_plans_before_dtype_replanning():
     policy = FormulaPolicy(
         rules=(

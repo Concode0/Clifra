@@ -12,7 +12,6 @@ and all basis interactions are expanded once. Hot tensor execution lives in
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Iterable, Optional
 
 import torch
@@ -38,17 +37,7 @@ from clifra.core.planning.tree import GradePlanTree, build_grade_plan_tree
 from clifra.core.runtime.tensors import TensorContract
 
 
-@dataclass(frozen=True)
-class ProductExecutorCost:
-    """Selected product route and its static resource summary."""
-
-    decision: RouteDecision
-    pair_count: int
-    path_count: int
-    backend: str
-
-
-def estimate_product_executor_cost(
+def select_product_route(
     algebra,
     *,
     op: str,
@@ -58,7 +47,7 @@ def estimate_product_executor_cost(
     dtype: torch.dtype,
     device,
     policy: PlanningPolicy | None = None,
-) -> ProductExecutorCost:
+) -> RouteDecision:
     """Enumerate product routes and select one using common plan facts."""
     policy = algebra.planning_policy if policy is None else policy
     tree = build_grade_plan_tree(
@@ -85,9 +74,6 @@ def estimate_product_executor_cost(
             "layout.left_lanes": left_layout.dim,
             "layout.right_lanes": right_layout.dim,
             "layout.output_lanes": output_layout.dim,
-            "product.pair_count": pair_count,
-            "product.path_count": tree.path_count,
-            "product.memory_units": peak_bytes / 4096.0,
         }
         return PlanCandidate(
             "product",
@@ -102,7 +88,7 @@ def estimate_product_executor_cost(
             unavailable_reason,
         )
 
-    decision = select_policy_route(
+    return select_policy_route(
         policy,
         (
             candidate(
@@ -114,14 +100,6 @@ def estimate_product_executor_cost(
             candidate("sparse", sparse_pairs, sparse_bytes),
         ),
     )
-    return ProductExecutorCost(
-        decision,
-        full_table_pairs if decision.route == "full_table" else sparse_pairs,
-        tree.path_count,
-        backend,
-    )
-
-
 def _device_backend(device) -> str:
     if device is None:
         return "cpu"

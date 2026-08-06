@@ -25,13 +25,13 @@ from clifra.core.planning.action import (
     build_versor_action_plan,
 )
 from clifra.core.planning.exp import DEFAULT_BIVECTOR_EXP_OPTIONS, build_bivector_exp_plan
-from clifra.core.planning.layouts import ProductRequest, build_product_request, normalize_product_op
+from clifra.core.planning.layouts import ProductRequest, build_product_request
 from clifra.core.planning.metric import build_signature_norm_squared_plan
 from clifra.core.planning.permutation import build_pseudoscalar_product_plan
 from clifra.core.planning.product import (
     build_full_table_product_plan_from_request,
     build_grade_product_plan_from_request,
-    estimate_product_executor_cost,
+    select_product_route,
 )
 from clifra.core.planning.resources import (
     validate_grades_cost,
@@ -132,8 +132,6 @@ class GradePlanner:
         if executor is not None:
             return executor
         family = self._product_executor_family(request)
-        key = self._product_request_cache_key(request)
-        executor = self._product_executors.get(key) if cache else None
         if executor is None:
             if family == "full_table":
                 plan = build_full_table_product_plan_from_request(request)
@@ -380,7 +378,6 @@ class GradePlanner:
             self.spec,
             str(resolved_device),
             str(dtype),
-            self.algebra.planning_policy.fingerprint,
             "bivector_exp",
             resolved_spectral_max_planes,
             resolved_spectral_tol_abs,
@@ -412,7 +409,6 @@ class GradePlanner:
             self.spec,
             str(resolved_device),
             str(dtype),
-            self.algebra.planning_policy.fingerprint,
             "bivector_exp",
             plan.spectral_max_planes,
             plan.spectral_tol_abs,
@@ -603,7 +599,6 @@ class GradePlanner:
             request.spec,
             str(request.device),
             str(request.dtype),
-            self.algebra.planning_policy.fingerprint,
             request.op,
             request.left_grades,
             request.right_grades,
@@ -611,7 +606,7 @@ class GradePlanner:
         )
 
     def _product_executor_family(self, request: ProductRequest) -> str:
-        cost = estimate_product_executor_cost(
+        decision = select_product_route(
             self.algebra,
             op=request.op,
             left_layout=request.left_layout,
@@ -620,7 +615,7 @@ class GradePlanner:
             dtype=request.dtype,
             device=request.device,
         )
-        return cost.decision.route
+        return decision.route
 
     def _action_plan_cache_key(
         self,
@@ -634,7 +629,6 @@ class GradePlanner:
             self.spec,
             str(self.algebra.device),
             str(self.algebra.dtype),
-            self.algebra.planning_policy.fingerprint,
             self.algebra.bivector_exp_options,
             family,
             grade,

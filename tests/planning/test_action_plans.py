@@ -6,13 +6,12 @@ from tests.planning._grade_plan_helpers import (
     AlgebraContext,
     FullSandwichActionExecutor,
     FullSandwichActionHandle,
+    GradedLinearActionExecutor,
     MultiVersorActionHandle,
     PairedBivectorActionHandle,
     VersorActionHandle,
     _oracle_for,
     _oracle_sandwich_action_matrices,
-    apply_graded_linear_action,
-    apply_multi_graded_linear_action,
     pytest,
     torch,
 )
@@ -126,15 +125,11 @@ def test_multi_graded_linear_action_matches_stacked_single_actions():
     values = torch.randn(2, 3, layout.dim, dtype=torch.float64)
     matrices = torch.randn(5, algebra.n, algebra.n, dtype=torch.float64)
 
-    actual = apply_multi_graded_linear_action(values, matrices, input_layout=layout, output_layout=layout)
+    executor = GradedLinearActionExecutor(input_layout=layout, output_layout=layout)
+    actual = executor.multi(values, matrices)
     expected = torch.stack(
         [
-            apply_graded_linear_action(
-                values,
-                matrix.unsqueeze(0).expand(values.shape[-2], -1, -1),
-                input_layout=layout,
-                output_layout=layout,
-            )
+            executor(values, matrix.unsqueeze(0).expand(values.shape[-2], -1, -1))
             for matrix in matrices
         ],
         dim=-2,

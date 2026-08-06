@@ -141,22 +141,16 @@ the same meaning across operation families.
 | `compile_work` | Relative graph and construction complexity |
 | `quality_exact` | The route provides the operation's exact semantic guarantee |
 | `quality_truncated` | The route may apply a declared static truncation |
-| `quality_unknown` | No exact or specific truncation guarantee is available |
 | `quality_value_dependent` | Approximation quality can depend on tensor values |
-| `error_bound_known` | The route publishes a finite error bound |
-| `error_bound` | The published error bound, or zero when no bound is known |
 
 Sequential forward, backward, and compilation work are normally additive. Peak
 storage depends on temporary lifetimes and is not generally additive. Exactness
 requires every relevant child route to be exact; truncation propagates when any
 child route truncates.
 
-`error_bound` is reserved for a finite upper bound on total route error. A
-composition may publish it when the operation has a valid propagation rule. If
-only the dominant source is understood, publish its bound or comparison signal
-as a qualified extension instead. For example, action planning carries
-`action.exp_rank_deficit` as a truncation proxy; it is useful for route ordering
-but is not presented as an output-error bound.
+Error estimates belong in qualified extensions until multiple operation
+families share the same bound and composition rule. Comparison signals such as
+`exp.rank_deficit` are not presented as output-error bounds.
 
 ### Extension attributes
 
@@ -169,9 +163,7 @@ Examples include:
 - `backend.cpu` and `backend.mps`;
 - `dtype.bytes`;
 - `layout.output_lanes`;
-- `product.pair_count` and `product.path_count`;
 - `exp.retained_rank` and `exp.rank_deficit`;
-- `action.exp_rank_deficit`;
 - application facts such as `vendor.machine_score`.
 
 Extension names must be dot-qualified. The defining operation or application
@@ -189,16 +181,14 @@ available to new operators.
 clifra base class.
 
 ```python
+from dataclasses import dataclass
+
 from clifra.core import PolicyEvaluation
 
 
+@dataclass(frozen=True)
 class MachinePolicy:
-    def __init__(self, work_scale: float):
-        self.work_scale = float(work_scale)
-
-    @property
-    def fingerprint(self):
-        return ("machine-policy-v1", self.work_scale)
+    work_scale: float
 
     def evaluate(self, candidate):
         facts = candidate.facts
@@ -207,13 +197,13 @@ class MachinePolicy:
             + facts["compile_work"]
             + facts["peak_bytes"] / 4096.0
         )
-        return PolicyEvaluation(score, "eligible", "machine")
+        return PolicyEvaluation(score, "eligible")
 ```
 
-The fingerprint must be hashable and must include every policy setting that can
-change a decision. Policy evaluation must be deterministic for a fixed
-candidate. Runtime tensor values, randomness, clocks, and mutable global state
-must not affect it.
+The policy is fixed for the lifetime of its `AlgebraContext`. Construct another
+algebra to use different policy settings. Evaluation must be deterministic for
+a fixed candidate; runtime tensor values, randomness, clocks, and mutable
+global state must not affect it.
 
 Returning `PolicyEvaluation(None, reason)` rejects a candidate. Returning a
 finite score accepts it.
@@ -237,7 +227,6 @@ For each route:
 - state its exactness, truncation, and value dependence;
 - publish a total error bound only when its upper-bound interpretation is valid;
 - otherwise publish a clearly named operation-specific comparison proxy;
-- retain the selected facts as `route_facts` on the plan;
 - include every static input that can change the route in the plan cache key;
 - keep tensor values out of planning.
 
@@ -258,16 +247,13 @@ parent planner must compose them explicitly when it:
 - exposes an inspectable parent plan.
 
 Action planning follows this pattern for its exponential and product children.
-`AnalysisComposition` provides the corresponding structure for analysis
-reports. Parent peak storage and error bounds must follow the actual lifetime
-and numerical behavior of the composition rather than a generic sum.
+Optional analysis operations use `ResourceLimits` directly before executing.
+Parent peak storage and error bounds must follow the actual lifetime and
+numerical behavior of the composition rather than a generic sum.
 
 ## Caching
 
 Product and bivector-exponential executors and policy-selected action plans are
-cached with the policy fingerprint and their static request data. Device or
-dtype moves clear policy-dependent caches before replanning.
-
-Changing policy behavior without changing its fingerprint can reuse a plan
-selected under the old behavior. Machine-specific calibration captured by a
-policy must therefore be part of its fingerprint.
+cached per algebra using their static request data. The injected policy remains
+fixed for that algebra's lifetime. Device or dtype moves clear policy-dependent
+caches before replanning.

@@ -18,7 +18,7 @@ from clifra.core.planning.policy import (
     environment_extensions,
     select_policy_route,
 )
-from clifra.core.planning.product import estimate_product_executor_cost
+from clifra.core.planning.product import select_product_route
 from clifra.core.runtime.tensors import TensorContract, _check_contract_spec
 
 
@@ -64,9 +64,6 @@ class VersorActionPlan:
     output_layout: GradeLayout
     parameter_layout: GradeLayout
     execution_path: str
-    route_facts: PlanFacts
-    route_score: float
-    route_region: str
     input_contract: TensorContract = field(init=False, repr=False)
     output_contract: TensorContract = field(init=False, repr=False)
     parameter_contract: TensorContract = field(init=False, repr=False)
@@ -90,9 +87,6 @@ class PairedBivectorActionPlan:
     rotor_layout: GradeLayout
     middle_layout: GradeLayout
     execution_path: str
-    route_facts: PlanFacts
-    route_score: float
-    route_region: str
     input_contract: TensorContract = field(init=False, repr=False)
     output_contract: TensorContract = field(init=False, repr=False)
     parameter_contract: TensorContract = field(init=False, repr=False)
@@ -158,9 +152,6 @@ def build_versor_action_plan(
         output_layout=output_layout,
         parameter_layout=parameter_layout,
         execution_path=decision.route,
-        route_facts=decision.facts,
-        route_score=decision.score,
-        route_region=decision.matched_region,
     )
 
 
@@ -206,9 +197,6 @@ def build_paired_bivector_action_plan(
         rotor_layout=rotor_layout,
         middle_layout=middle_layout,
         execution_path=decision.route,
-        route_facts=decision.facts,
-        route_score=decision.score,
-        route_region=decision.matched_region,
     )
 
 
@@ -238,7 +226,7 @@ def _select_versor_action_route(algebra, *, grade, input_layout, output_layout, 
         spec = AlgebraSpec.from_algebra(algebra)
         rotor_layout = spec.layout(range(0, algebra.n + 1, 2))
         middle_layout = spec.layout(expand_output_grades(rotor_layout.grades, input_layout.grades, algebra.n, op="gp"))
-        exp_facts = _bivector_exp_facts(algebra, parameter_layout, rotor_layout)
+        exp_facts = _bivector_exp_facts(algebra, rotor_layout)
         left_facts = _product_facts(algebra, rotor_layout, input_layout, middle_layout)
         right_facts = _product_facts(algebra, middle_layout, rotor_layout, output_layout)
         rotor_facts = compose_plan_facts(
@@ -246,7 +234,6 @@ def _select_versor_action_route(algebra, *, grade, input_layout, output_layout, 
             left_facts,
             right_facts,
             peak_bytes=(rotor_layout.dim + middle_layout.dim + output_layout.dim) * dtype_bytes,
-            extensions=_exp_extensions(exp_facts),
         )
         rotor_intermediate_lanes = middle_layout.dim
     full_action_facts = _full_action_facts(algebra, exp_facts, 1, dtype_bytes)
@@ -296,7 +283,7 @@ def _select_paired_action_route(
 ):
     full = input_layout.dim == algebra.dim and output_layout.dim == algebra.dim
     dtype_bytes = torch.finfo(algebra.dtype).bits // 8
-    exp_facts = _bivector_exp_facts(algebra, parameter_layout, rotor_layout)
+    exp_facts = _bivector_exp_facts(algebra, rotor_layout)
     left_facts = _product_facts(algebra, rotor_layout, input_layout, middle_layout)
     right_facts = _product_facts(algebra, middle_layout, rotor_layout, output_layout)
     paired_facts = compose_plan_facts(
@@ -305,7 +292,6 @@ def _select_paired_action_route(
         left_facts,
         right_facts,
         peak_bytes=(2 * rotor_layout.dim + middle_layout.dim + output_layout.dim) * dtype_bytes,
-        extensions=_exp_extensions(exp_facts),
     )
     full_action_facts = _full_action_facts(algebra, exp_facts, 2, dtype_bytes)
     candidates = (
@@ -333,10 +319,6 @@ def _select_paired_action_route(
     return select_policy_route(algebra.planning_policy, candidates)
 
 
-def _exp_extensions(facts: PlanFacts) -> dict[str, float]:
-    return {"action.exp_rank_deficit": 0.0 if facts.exact else facts["exp.rank_deficit"]}
-
-
 def _full_action_facts(algebra, exp_facts: PlanFacts, exp_count: int, dtype_bytes: int) -> PlanFacts:
     matrix_elements = algebra.dim**2
     matrix = PlanFacts(
@@ -346,12 +328,11 @@ def _full_action_facts(algebra, exp_facts: PlanFacts, exp_count: int, dtype_byte
         *((exp_facts,) * exp_count),
         matrix,
         peak_bytes=(matrix_elements + 2 * exp_count * algebra.dim) * dtype_bytes,
-        extensions=_exp_extensions(exp_facts),
     )
 
 
 def _product_facts(algebra, left_layout, right_layout, output_layout) -> PlanFacts:
-    cost = estimate_product_executor_cost(
+    decision = select_product_route(
         algebra,
         op="gp",
         left_layout=left_layout,
@@ -360,10 +341,10 @@ def _product_facts(algebra, left_layout, right_layout, output_layout) -> PlanFac
         dtype=algebra.dtype,
         device=algebra.device,
     )
-    return cost.decision.facts
+    return decision.facts
 
 
-def _bivector_exp_facts(algebra, input_layout, output_layout) -> PlanFacts:
+def _bivector_exp_facts(algebra, output_layout) -> PlanFacts:
     from clifra.core.planning.exp import select_bivector_exp_route, spectral_exp_preselection
 
     options = algebra.bivector_exp_options

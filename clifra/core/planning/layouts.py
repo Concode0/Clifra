@@ -128,20 +128,6 @@ class ProductRequest:
         """Return the grades selected for the product output."""
         return self.output_layout.grades
 
-    @property
-    def cache_key(self) -> tuple[object, ...]:
-        """Stable key for executor caching."""
-        return (
-            self.spec,
-            str(self.device),
-            str(self.dtype),
-            self.op,
-            self.left_grades,
-            self.right_grades,
-            self.output_grades,
-        )
-
-
 def build_product_request(
     spec: AlgebraSpec,
     left: torch.Tensor,

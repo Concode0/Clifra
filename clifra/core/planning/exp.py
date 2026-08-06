@@ -127,9 +127,6 @@ class BivectorExpPlan:
     nondegenerate_dim: int
     ideal_dim: int
     spectral_local_axis_count: int
-    route_facts: PlanFacts
-    route_score: float
-    route_region: str
     eps: float
     eps_sq: float
     input_contract: TensorContract = field(init=False, repr=False)
@@ -281,9 +278,7 @@ def build_bivector_exp_plan(
         bivector_to_operator = torch.zeros((0, 0), dtype=dtype, device=buffer_device)
         operator_to_output = torch.zeros((0, 0), dtype=dtype, device=buffer_device)
     else:
-        local_buffers = _empty_spectral_local_buffers(
-            spec, input_layout, output_layout, dtype=dtype, device=buffer_device
-        )
+        local_buffers = _empty_spectral_local_buffers(spec, dtype=dtype, device=buffer_device)
         spectral_nondegenerate_entries = _empty_generator_entries(dtype=dtype, device=buffer_device)
         spectral_mixed_entries = _empty_generator_entries(dtype=dtype, device=buffer_device)
         bivector_to_nondegenerate_generator = _bivector_to_nondegenerate_generator(
@@ -383,9 +378,6 @@ def build_bivector_exp_plan(
         nondegenerate_dim=preselection.nondegenerate_dim,
         ideal_dim=preselection.ideal_dim,
         spectral_local_axis_count=int(local_buffers["axis_count"]),
-        route_facts=route_decision.facts,
-        route_score=route_decision.score,
-        route_region=route_decision.matched_region,
         eps=float(finfo.eps),
         eps_sq=float(finfo.eps**2),
     )
@@ -393,8 +385,6 @@ def build_bivector_exp_plan(
 
 def _empty_spectral_local_buffers(
     spec: AlgebraSpec,
-    input_layout: GradeLayout,
-    output_layout: GradeLayout,
     *,
     dtype: torch.dtype,
     device,
@@ -588,7 +578,6 @@ def _spectral_local_buffers(
             axis_count,
             local_p,
             local_q,
-            int(ideal_dim),
             dtype=dtype,
             device=device,
         )
@@ -600,7 +589,7 @@ def _spectral_local_buffers(
         grade = int(output_index).bit_count()
         if grade % 2 == 0 and grade <= axis_count:
             output_positions_by_grade.setdefault(grade, []).append(
-                (output_position, tuple(_basis_bits(output_index, spec.n)))
+                (output_position, tuple(_basis_bits(output_index)))
             )
 
     grades = [grade for grade in range(0, axis_count + 1, 2) if grade in output_positions_by_grade]
@@ -608,7 +597,7 @@ def _spectral_local_buffers(
         grades = [0]
     local_blades_by_grade = {
         grade: [
-            (position, tuple(_basis_bits(index, axis_count)))
+            (position, tuple(_basis_bits(index)))
             for position, index in enumerate(local_indices)
             if int(index).bit_count() == grade
         ]
@@ -718,7 +707,6 @@ def _cached_even_local_product_table(axis_count: int, local_indices: tuple[int, 
         int(axis_count),
         int(axis_count),
         0,
-        0,
         dtype=torch.float32,
         device=torch.device("cpu"),
     )
@@ -745,7 +733,6 @@ def _sparse_product_buffers(
     axis_count: int,
     p: int,
     q: int,
-    r: int,
     *,
     dtype: torch.dtype,
     device,
@@ -851,7 +838,6 @@ def _plane_exp_buffers(
             plane_axis_count,
             plane_p,
             plane_q,
-            ideal_dim,
             dtype=dtype,
             device=device,
         )
@@ -861,7 +847,7 @@ def _plane_exp_buffers(
         axis_map.update({2 + ideal_axis: local_nondegenerate_dim + ideal_axis for ideal_axis in range(ideal_dim)})
         for plane_position, plane_index in enumerate(plane_indices):
             local_index = 0
-            for axis in _basis_bits(plane_index, plane_axis_count):
+            for axis in _basis_bits(plane_index):
                 local_index |= 1 << axis_map[axis]
             to_local[plane, plane_position, local_positions[local_index]] = 1.0
 
@@ -892,7 +878,7 @@ def _nilpotent_to_local_positions(
     input_positions: list[int] = []
     output_positions: list[int] = []
     for input_position, input_index in enumerate(input_layout.basis_indices):
-        bits = _basis_bits(input_index, spec.n)
+        bits = _basis_bits(input_index)
         if len(bits) != 2 or bits[0] < nondegenerate_dim or bits[1] < nondegenerate_dim:
             continue
         local_index = 0
@@ -925,7 +911,7 @@ def _bivector_axis_partition(
     split = spec.p + spec.q
 
     for position, index in enumerate(input_layout.basis_indices):
-        bits = _basis_bits(index, spec.n)
+        bits = _basis_bits(index)
         if len(bits) != 2:
             continue
         left_is_null = bits[0] >= split
@@ -955,7 +941,7 @@ def _bivector_to_nondegenerate_generator(
     output = torch.zeros((input_layout.dim, nondegenerate_dim, nondegenerate_dim), dtype=dtype, device=device)
 
     for bivector_position, bivector_index in enumerate(input_layout.basis_indices):
-        bits = _basis_bits(bivector_index, spec.n)
+        bits = _basis_bits(bivector_index)
         if len(bits) != 2 or bits[0] >= nondegenerate_dim or bits[1] >= nondegenerate_dim:
             continue
         left_axis, right_axis = bits
@@ -977,7 +963,7 @@ def _bivector_to_mixed_generator(
         return output
 
     for bivector_position, bivector_index in enumerate(input_layout.basis_indices):
-        bits = _basis_bits(bivector_index, spec.n)
+        bits = _basis_bits(bivector_index)
         if len(bits) != 2 or not (bits[0] < nondegenerate_dim <= bits[1]):
             continue
         nondegenerate_axis, ideal_axis = bits[0], bits[1] - nondegenerate_dim
@@ -993,7 +979,7 @@ def _axis_metric_sign(axis: int, spec: AlgebraSpec) -> float:
     return 0.0
 
 
-def _basis_bits(index: int, n: int) -> list[int]:
+def _basis_bits(index: int) -> list[int]:
     value = int(index)
     bits: list[int] = []
     while value:
@@ -1038,7 +1024,7 @@ def _bivector_to_nondegenerate_generator_entries(
     coefficients: list[float] = []
 
     for bivector_position, bivector_index in enumerate(input_layout.basis_indices):
-        bits = _basis_bits(bivector_index, spec.n)
+        bits = _basis_bits(bivector_index)
         if len(bits) != 2 or bits[0] >= nondegenerate_dim or bits[1] >= nondegenerate_dim:
             continue
         left_axis, right_axis = bits
@@ -1072,7 +1058,7 @@ def _bivector_to_mixed_generator_entries(
     coefficients: list[float] = []
 
     for bivector_position, bivector_index in enumerate(input_layout.basis_indices):
-        bits = _basis_bits(bivector_index, spec.n)
+        bits = _basis_bits(bivector_index)
         if len(bits) != 2 or not (bits[0] < nondegenerate_dim <= bits[1]):
             continue
         nondegenerate_axis, ideal_axis = bits[0], bits[1] - nondegenerate_dim
