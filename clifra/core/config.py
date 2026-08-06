@@ -50,7 +50,7 @@ class AlgebraConfig:
     p: int
     q: int = 0
     r: int = 0
-    device: str = "cuda"
+    device: str = "cpu"
     dtype: torch.dtype = torch.float32
     default_grades: Optional[tuple[int, ...]] = None
     planning_policy: Optional[PlanningPolicy] = None
@@ -71,7 +71,7 @@ class AlgebraConfig:
             "p": int(_mapping_get(config, "p", 0)),
             "q": int(_mapping_get(config, "q", 0)),
             "r": int(_mapping_get(config, "r", 0)),
-            "device": _mapping_get(config, "device", "cuda"),
+            "device": _mapping_get(config, "device", "cpu"),
             "dtype": resolve_dtype(_mapping_get(config, "dtype", torch.float32)),
             "default_grades": _optional_grades(_mapping_get(config, "default_grades", None)),
             "planning_policy": _mapping_get(config, "planning_policy", None),
@@ -88,7 +88,7 @@ def make_algebra(
     q: int = 0,
     r: int = 0,
     *,
-    device="cuda",
+    device="cpu",
     dtype: torch.dtype = torch.float32,
     default_grades: Optional[Iterable[int]] = None,
     planning_policy: Optional[PlanningPolicy] = None,

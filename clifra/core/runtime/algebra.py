@@ -32,7 +32,7 @@ class AlgebraContext(AlgebraHostMixin):
         q: int = 0,
         r: int = 0,
         *,
-        device="cuda",
+        device="cpu",
         dtype: torch.dtype = torch.float32,
         default_grades: Optional[Iterable[int]] = None,
         planning_policy: Optional[PlanningPolicy] = None,
