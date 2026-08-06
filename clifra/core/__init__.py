@@ -6,7 +6,7 @@
 Provides Clifford algebra hosts, layout contracts, planner/executor utilities,
 metric functions, and signature search utilities.
 
-Analysis tools live under ``clifra.core.analysis`` and should be imported from
+Analysis tools live under ``clifra.analysis`` and should be imported from
 their owning modules.
 """
 
@@ -49,7 +49,6 @@ from .foundation.device import dtype_name, optional_dtype, resolve_device, resol
 from .foundation.layout import AlgebraSpec, GradeLayout
 from .foundation.module import AlgebraLike, CliffordModule
 from .foundation.numerics import covariance_regularizer, eps_for, eps_like, signed_clamp_min
-from .foundation.validation import check_channels, check_multivector
 from .planning.exp import (
     DEFAULT_BIVECTOR_EXP_OPTIONS,
     SPECTRAL_LOCAL_TRUNCATION_NOTICE,
@@ -64,7 +63,6 @@ from .planning.exp import (
     spectral_exp_preselection,
     spectral_exp_uniform_tail_stress,
 )
-from .planning.flow import GradeFlow
 from .planning.layouts import ProductRequest, build_product_request
 from .planning.metric import (
     SignatureNormSquaredPlan,
@@ -187,8 +185,6 @@ __all__ = [
     "eps_like",
     "signed_clamp_min",
     "covariance_regularizer",
-    "check_multivector",
-    "check_channels",
     "basis_blade_label",
     "format_multivector",
     "normalize_lane_storage",
@@ -232,7 +228,6 @@ __all__ = [
     "PseudoscalarProductPlan",
     "GradePathNode",
     "GradePlanTree",
-    "GradeFlow",
     "ProductRequest",
     "GradeUnaryExecutor",
     "GradeUnaryOp",

@@ -96,10 +96,6 @@ ignore = [
     "E402",  # Some tests set pytest marks before local imports.
     "E702",  # Compact mathematical scratch code may use semicolon-separated statements.
     "E741",  # Single-letter algebra notation is common in math-heavy code.
-    "F401",  # Re-export modules and optional imports need a separate cleanup pass.
-    "F541",  # Existing display strings sometimes keep f-prefixes for symmetry.
-    "F811",  # Local imports intentionally shadow top-level test imports.
-    "F841",  # Scratch variables appear in exploratory tests.
 ]
 
 [tool.pytest.ini_options]

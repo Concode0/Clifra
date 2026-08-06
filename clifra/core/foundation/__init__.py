@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""Foundation value objects, basis utilities, validation, and low-level device helpers."""
+"""Foundation value objects, basis utilities, contracts, and low-level device helpers."""
 
 from .basis import (
     GradeProductOp,
@@ -33,7 +33,6 @@ from .manifold import (
 )
 from .module import AlgebraLike, CliffordModule
 from .numerics import covariance_regularizer, eps_for, eps_like, signed_clamp_min
-from .validation import check_channels, check_multivector
 
 __all__ = [
     "AlgebraLike",
@@ -50,8 +49,6 @@ __all__ = [
     "basis_index_tuple_for_grades",
     "basis_indices_for_grades",
     "basis_product",
-    "check_channels",
-    "check_multivector",
     "covariance_regularizer",
     "dtype_name",
     "eps_for",

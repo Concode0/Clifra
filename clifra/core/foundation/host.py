@@ -23,7 +23,7 @@ from clifra.core.execution.handles import (
     UnaryPlanHandle,
     VersorActionHandle,
 )
-from clifra.core.foundation.basis import expand_output_grades, normalize_grades
+from clifra.core.foundation.basis import expand_output_grades
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
 from clifra.core.foundation.numerics import signed_clamp_min
 from clifra.core.planning.layouts import ProductRequest, normalize_product_op
@@ -65,11 +65,8 @@ class AlgebraHostMixin:
         *,
         layout: Optional[GradeLayout] = None,
         grades: Optional[Iterable[int]] = None,
-        mv=None,
     ) -> GradeLayout:
-        """Resolve explicit layout metadata. Tensor inspection is intentionally not supported."""
-        if mv is not None:
-            raise TypeError("Multivector wrappers are not part of the core layout contract")
+        """Resolve explicit layout metadata."""
         return resolve_contract(self, layout=layout, grades=grades).layout
 
     def grade_indices(self, grades: Iterable[int], *, device=None) -> torch.Tensor:
@@ -510,6 +507,14 @@ class AlgebraHostMixin:
         """Projected wedge product convenience wrapper."""
         return self.projected_product(A, B, op="wedge", **kwargs)
 
+    def geometric_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
+        """Apply the geometric product through a planned product executor."""
+        return self.projected_product(A, B, op="gp", **kwargs)
+
+    def wedge(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
+        """Apply the exterior product through a planned product executor."""
+        return self.projected_product(A, B, op="wedge", **kwargs)
+
     def symmetric_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
         """Apply the normalized anti-commutator ``(A B + B A) / 2``."""
         return self.projected_product(A, B, op="symmetric_product", **kwargs)
@@ -521,14 +526,6 @@ class AlgebraHostMixin:
     def anti_commutator_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
         """Apply the unnormalized anti-commutator ``A B + B A``."""
         return self.projected_product(A, B, op="anti_commutator_product", **kwargs)
-
-    def projected_left_contraction(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
-        """Projected left contraction convenience wrapper."""
-        return self.projected_product(A, B, op="left_contraction", **kwargs)
-
-    def projected_right_contraction(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
-        """Projected right contraction convenience wrapper."""
-        return self.projected_product(A, B, op="right_contraction", **kwargs)
 
     def left_contraction(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
         """Apply left contraction through a planned product executor."""
@@ -567,6 +564,30 @@ class AlgebraHostMixin:
         if request.output.uses_canonical_storage:
             output = request.output.layout.full(output)
         return (output, request.output_layout) if return_layout else output
+
+    def grade_projection(self, values: torch.Tensor, grade: int, **kwargs) -> torch.Tensor:
+        """Project declared multivector coefficients to one grade."""
+        kwargs.setdefault("output_grades", (int(grade),))
+        return self.planned_unary(values, op="grade_projection", **kwargs)
+
+    def embed_vector(self, vectors: torch.Tensor) -> torch.Tensor:
+        """Embed grade-1 vector coordinates into canonical multivector lanes."""
+        if vectors.shape[-1] != self.n:
+            raise ValueError(f"vectors last dimension must be {self.n}, got {vectors.shape[-1]}")
+        output = vectors.new_zeros(*vectors.shape[:-1], self.dim)
+        return output.index_copy(-1, self._basis_vector_indices(vectors.device), vectors)
+
+    def reverse(self, values: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Reverse canonical or compact multivector coefficients."""
+        return self.planned_unary(values, op="reverse", **kwargs)
+
+    def grade_involution(self, values: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Apply grade involution to canonical or compact multivector coefficients."""
+        return self.planned_unary(values, op="grade_involution", **kwargs)
+
+    def clifford_conjugation(self, values: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Apply Clifford conjugation to canonical or compact multivector coefficients."""
+        return self.planned_unary(values, op="clifford_conjugation", **kwargs)
 
     def signature_norm_squared(
         self,
@@ -839,10 +860,12 @@ class AlgebraHostMixin:
     ):
         """Execute a planned vector-space linear action."""
         input_layout = self._declared_layout(input_grades, input_layout)
-        output_layout = self._optional_layout(output_grades, output_layout)
-        if output_layout is None:
-            output_layout = input_layout
-        executor = GradedLinearActionExecutor(input_layout=input_layout, output_layout=output_layout)
+        output_layout = self._optional_layout(output_grades, output_layout) or input_layout
+        plan = self.planner.linear_action_plan(input_layout=input_layout, output_layout=output_layout)
+        executor = GradedLinearActionExecutor(
+            input_layout=plan.input_layout,
+            output_layout=plan.output_layout,
+        ).to(device=values.device)
         action_values = values if values.shape[-1] == input_layout.dim else input_layout.compact(values)
         output = executor(action_values, matrix)
         return (output, output_layout) if return_layout else output
@@ -980,12 +1003,6 @@ class AlgebraHostMixin:
         resolved = self._declared_layout(input_grades, layout)
         return lane_grade_norms(self, values, layout=resolved)
 
-    def multivector(self, values: torch.Tensor, **kwargs):
-        """Return a debug-only multivector formatter for ``values``."""
-        from clifra.core.formatting import Multivector
-
-        return Multivector(self, values, **kwargs)
-
     def format_multivector(self, values: torch.Tensor, **kwargs) -> str:
         """Format ``values`` as basis-blade terms for debugging."""
         from clifra.core.formatting import format_multivector
@@ -1095,11 +1112,6 @@ class AlgebraHostMixin:
         if resolved_output is None:
             raise ValueError("bivector exp could not resolve an output layout")
         return resolved_input, resolved_output
-
-    @staticmethod
-    def _check_declared_layout(layout: GradeLayout, grades, side: str) -> None:
-        if grades is not None and layout.grades != normalize_grades(grades, layout.spec.n, name=f"{side}_grades"):
-            raise ValueError(f"{side}_layout and {side}_grades disagree")
 
     @staticmethod
     def _compact_values_for_layout(values: torch.Tensor, layout: GradeLayout, name: str) -> torch.Tensor:

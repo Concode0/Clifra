@@ -20,7 +20,6 @@ from clifra.core.planning.exp import DEFAULT_BIVECTOR_EXP_OPTIONS, BivectorExpOp
 from clifra.core.planning.planner import GradePlanner
 from clifra.core.planning.policy import DEFAULT_PLANNING_POLICY, PlanningPolicy
 from clifra.core.planning.resources import DEFAULT_RESOURCE_LIMITS, ResourceLimits
-from clifra.core.runtime.tensors import LaneStorage
 
 
 class AlgebraContext(AlgebraHostMixin):
@@ -52,7 +51,6 @@ class AlgebraContext(AlgebraHostMixin):
         self._device = torch.device(resolve_device(device) if str(device) == "auto" else device)
         self._dtype = resolve_dtype(dtype)
         self._planning_policy = DEFAULT_PLANNING_POLICY if planning_policy is None else planning_policy
-        hash(self._planning_policy.fingerprint)
         self.resource_limits = DEFAULT_RESOURCE_LIMITS if resource_limits is None else resource_limits
         self.bivector_exp_options = (
             DEFAULT_BIVECTOR_EXP_OPTIONS if bivector_exp_options is None else bivector_exp_options
@@ -106,85 +104,6 @@ class AlgebraContext(AlgebraHostMixin):
         self._g1_indices_cache.clear()
         self.planner.clear_cache()
         return self
-
-    def geometric_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Plan and execute a geometric product."""
-        return self.projected_product(A, B, op="gp", **kwargs)
-
-    def wedge(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Plan and execute an exterior product."""
-        return self.projected_product(A, B, op="wedge", **kwargs)
-
-    def symmetric_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Plan and execute the normalized anti-commutator ``(A B + B A) / 2``."""
-        return self.projected_product(A, B, op="symmetric_product", **kwargs)
-
-    def commutator_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Plan and execute the commutator ``A B - B A``."""
-        return self.projected_product(A, B, op="commutator_product", **kwargs)
-
-    def anti_commutator_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Plan and execute the unnormalized anti-commutator ``A B + B A``."""
-        return self.projected_product(A, B, op="anti_commutator_product", **kwargs)
-
-    def grade_projection(self, mv: torch.Tensor, grade: int, **kwargs) -> torch.Tensor:
-        """Project declared multivector coefficients to one grade."""
-        kwargs.setdefault("output_grades", (int(grade),))
-        return self.planned_unary(mv, op="grade_projection", **kwargs)
-
-    def embed_vector(self, vectors: torch.Tensor) -> torch.Tensor:
-        """Embed grade-1 vector coordinates into full-lane multivector coefficients."""
-        if vectors.shape[-1] != self.n:
-            raise ValueError(f"vectors last dimension must be {self.n}, got {vectors.shape[-1]}")
-        output = vectors.new_zeros(*vectors.shape[:-1], self.dim)
-        return output.index_copy(-1, self._basis_vector_indices(vectors.device), vectors)
-
-    def reverse(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Reverse full-lane or compact multivector coefficients."""
-        return self.planned_unary(mv, op="reverse", **kwargs)
-
-    def grade_involution(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Apply grade involution to full-lane or compact multivector coefficients."""
-        return self.planned_unary(mv, op="grade_involution", **kwargs)
-
-    def clifford_conjugation(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Apply Clifford conjugation to full-lane or compact multivector coefficients."""
-        return self.planned_unary(mv, op="clifford_conjugation", **kwargs)
-
-    def bivector_exp(
-        self,
-        mv: torch.Tensor,
-        *,
-        input_grades=None,
-        output_grades=None,
-        input_layout: Optional[GradeLayout] = None,
-        output_layout: Optional[GradeLayout] = None,
-        spectral_max_planes: Optional[int] = None,
-        spectral_tol_abs: Optional[float] = None,
-        spectral_tol_rel: Optional[float] = None,
-        spectral_dominant_rel: Optional[float] = None,
-        spectral_allow_degenerate: Optional[bool] = None,
-        spectral_allow_truncated_degenerate: Optional[bool] = None,
-        output_storage: LaneStorage | str = LaneStorage.COMPACT,
-        return_layout: bool = False,
-    ) -> torch.Tensor:
-        """Exponentiate a declared bivector through the shared planner route."""
-        return AlgebraHostMixin.bivector_exp(
-            self,
-            mv,
-            input_grades=input_grades,
-            output_grades=output_grades,
-            input_layout=input_layout,
-            output_layout=output_layout,
-            spectral_max_planes=spectral_max_planes,
-            spectral_tol_abs=spectral_tol_abs,
-            spectral_tol_rel=spectral_tol_rel,
-            spectral_dominant_rel=spectral_dominant_rel,
-            spectral_allow_degenerate=spectral_allow_degenerate,
-            spectral_allow_truncated_degenerate=spectral_allow_truncated_degenerate,
-            output_storage=output_storage,
-            return_layout=return_layout,
-        )
 
     def _basis_vector_indices(self, device) -> torch.Tensor:
         resolved = torch.device(device)

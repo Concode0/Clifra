@@ -92,7 +92,7 @@ class RotorGadget(CliffordModule):
             input_grades = grades
 
         if algebra.num_grades <= 2:
-            raise ValueError(f"Algebra has no bivectors. RotorGadget requires at least one bivector for rotation.")
+            raise ValueError("Algebra has no bivectors. RotorGadget requires at least one bivector for rotation.")
         self.input_contract = resolve_contract(algebra, layout=input_layout, grades=input_grades)
         resolved_output_layout = (
             resolve_contract(algebra, layout=output_layout, grades=output_grades).layout
@@ -113,7 +113,6 @@ class RotorGadget(CliffordModule):
         self.output_layout = self.output_contract.layout
         self.rotor_layout = self.action_plan.rotor_layout
         self.middle_layout = self.action_plan.middle_layout
-        self.input_lane_dim = self.input_contract.lane_dim
         self.output_lane_dim = self.output_contract.lane_dim
         self.num_bivectors = self.parameter_layout.dim
         self.action = algebra.plan_paired_bivector_action(
@@ -164,29 +163,6 @@ class RotorGadget(CliffordModule):
             self.in_channels,
             rounding_mode="floor",
         ).clamp_max(self.num_rotor_pairs - 1)
-        out_assignment = torch.div(
-            torch.arange(self.out_channels) * self.num_rotor_pairs,
-            self.out_channels,
-            rounding_mode="floor",
-        ).clamp_max(self.num_rotor_pairs - 1)
-
-        in_indices = []
-        out_indices = []
-        for i in range(self.num_rotor_pairs):
-            in_members = (in_assignment == i).nonzero(as_tuple=False).flatten()
-            out_members = (out_assignment == i).nonzero(as_tuple=False).flatten()
-            if in_members.numel() == 0:
-                in_indices.append((self.in_channels, self.in_channels))
-            else:
-                in_indices.append((int(in_members[0]), int(in_members[-1]) + 1))
-            if out_members.numel() == 0:
-                out_indices.append((self.out_channels, self.out_channels))
-            else:
-                out_indices.append((int(out_members[0]), int(out_members[-1]) + 1))
-
-        self.in_indices = in_indices
-        self.out_indices = out_indices
-
         ch2pair = in_assignment.long()
         self.register_buffer("_ch2pair", ch2pair)
         self.register_buffer("_channel_mix_mean", channel_mix(self.in_channels, self.out_channels, normalize=True))

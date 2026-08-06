@@ -27,6 +27,7 @@ def test_format_full_multivector_terms_without_layout_noise():
 
     assert format_multivector(algebra, values) == "1 + 2e1 - 0.5e12"
     assert algebra.format_multivector(values, name="x") == "x = 1 + 2e1 - 0.5e12"
+    assert not hasattr(algebra, "multivector")
 
 
 def test_format_compact_multivector_requires_declared_grades():

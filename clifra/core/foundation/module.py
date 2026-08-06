@@ -56,9 +56,8 @@ class AlgebraLike(Protocol):
         *,
         layout: Optional[GradeLayout] = None,
         grades: Optional[Iterable[int]] = None,
-        mv=None,
     ) -> GradeLayout:
-        """Resolve static layout metadata for tensors or multivectors."""
+        """Resolve static layout metadata."""
         ...
 
     def grade_indices(self, grades: Iterable[int], *, device=None) -> torch.Tensor:
@@ -144,27 +143,27 @@ class AlgebraLike(Protocol):
         """Apply right contraction."""
         ...
 
-    def grade_projection(self, mv: torch.Tensor, grade: int, **kwargs) -> torch.Tensor:
+    def grade_projection(self, values: torch.Tensor, grade: int, **kwargs) -> torch.Tensor:
         """Project to a single grade."""
         ...
 
-    def reverse(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
+    def reverse(self, values: torch.Tensor, **kwargs) -> torch.Tensor:
         """Apply reversion."""
         ...
 
-    def grade_involution(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
+    def grade_involution(self, values: torch.Tensor, **kwargs) -> torch.Tensor:
         """Apply grade involution."""
         ...
 
-    def clifford_conjugation(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
+    def clifford_conjugation(self, values: torch.Tensor, **kwargs) -> torch.Tensor:
         """Apply Clifford conjugation."""
         ...
 
-    def signature_norm_squared(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
+    def signature_norm_squared(self, values: torch.Tensor, **kwargs) -> torch.Tensor:
         """Return the signed Clifford signature norm squared."""
         ...
 
-    def pseudoscalar_product(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
+    def pseudoscalar_product(self, values: torch.Tensor, **kwargs) -> torch.Tensor:
         """Apply right multiplication by the pseudoscalar."""
         ...
 
@@ -188,7 +187,7 @@ class AlgebraLike(Protocol):
         """Apply a general versor product."""
         ...
 
-    def bivector_exp(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
+    def bivector_exp(self, values: torch.Tensor, **kwargs) -> torch.Tensor:
         """Exponentiate a declared bivector."""
         ...
 
@@ -253,10 +252,6 @@ class AlgebraLike(Protocol):
 
     def grade_norms(self, values: torch.Tensor, **kwargs) -> torch.Tensor:
         """Return per-grade coefficient norms for declared-layout values."""
-        ...
-
-    def multivector(self, values: torch.Tensor, **kwargs):
-        """Return a debug-only multivector formatter for ``values``."""
         ...
 
     def format_multivector(self, values: torch.Tensor, **kwargs) -> str:

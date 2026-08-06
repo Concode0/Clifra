@@ -15,7 +15,6 @@ from clifra.core.runtime.tensors import (
     TensorContract,
     _check_contract_spec,
     canonical_values,
-    metric_self_signs,
     resolve_contract,
 )
 
@@ -352,9 +351,6 @@ class FullSandwichActionExecutor(nn.Module):
         channel_matrices = torch.index_select(matrices, 0, channel_to_pair)
         return torch.einsum("...cj,ckj->...ck", values, channel_matrices)
 
-    def _indices_for(self, values: torch.Tensor) -> torch.Tensor:
-        return self.cayley_indices
-
     def _check_factors(self, left: torch.Tensor, right: torch.Tensor) -> None:
         if left.ndim != 2 or right.ndim != 2:
             raise ValueError(f"left and right factors must have shape [items, {self.dim}]")
@@ -362,13 +358,6 @@ class FullSandwichActionExecutor(nn.Module):
             raise ValueError(f"left and right factors must have matching shape [items, {self.dim}]")
         self.contract.validate(left, name="left")
         self.contract.validate(right, name="right")
-
-    def _left_signs_for(self, values: torch.Tensor) -> torch.Tensor:
-        return self.left_sign_t
-
-    def _gp_signs_for(self, values: torch.Tensor) -> torch.Tensor:
-        return self.gp_sign_t
-
 
 class _VersorActionExecutor(nn.Module):
     """Shared execution setup for single and mixed versor actions."""
@@ -740,109 +729,6 @@ class PairedBivectorActionExecutor(nn.Module):
         return left_rotor, self.rotor_reverse(right_rotor)
 
 
-def apply_graded_linear_action(
-    values: torch.Tensor,
-    matrix: torch.Tensor,
-    *,
-    input_layout: GradeLayout,
-    output_layout: GradeLayout,
-) -> torch.Tensor:
-    """Apply the outermorphism induced by a vector-space linear action."""
-    return GradedLinearActionExecutor(input_layout=input_layout, output_layout=output_layout)(values, matrix)
-
-
-def apply_multi_graded_linear_action(
-    values: torch.Tensor,
-    matrices: torch.Tensor,
-    *,
-    input_layout: GradeLayout,
-    output_layout: GradeLayout,
-) -> torch.Tensor:
-    """Apply multiple outermorphisms to declared grade lanes."""
-    return GradedLinearActionExecutor(input_layout=input_layout, output_layout=output_layout).multi(values, matrices)
-
-
-def versor_vector_matrix(algebra, weights: torch.Tensor, *, grade: int, parameter_layout: GradeLayout) -> torch.Tensor:
-    """Return the vector-space matrix represented by grade-1 or grade-2 weights."""
-    parameter_layout = resolve_contract(algebra, layout=parameter_layout, name="parameter_layout").layout
-    return VersorVectorMatrixExecutor(
-        grade=grade,
-        parameter_layout=parameter_layout,
-        eps=algebra.eps_sq,
-        dtype=weights.dtype,
-        device=weights.device,
-    )(weights)
-
-
-def bivector_vector_generator(bivectors: torch.Tensor, *, bivector_layout: GradeLayout) -> torch.Tensor:
-    """Return the vector-space generator induced by bivectors."""
-    return BivectorVectorGeneratorExecutor(
-        bivector_layout=bivector_layout,
-        dtype=bivectors.dtype,
-        device=bivectors.device,
-    )(bivectors)
-
-
-def reflection_vector_matrix(normals: torch.Tensor, *, vector_layout: GradeLayout, eps: float) -> torch.Tensor:
-    """Return the vector-space reflection matrix for normal vectors."""
-    contract = TensorContract.compact(vector_layout.spec, vector_layout)
-    if vector_layout.grades != (1,):
-        raise ValueError(f"vector_layout must contain grade 1 only, got {vector_layout.grades}")
-    contract.validate(normals, name="normals")
-
-    signs = metric_self_signs(vector_layout, device=normals.device, dtype=normals.dtype)
-    denominator = (normals * normals * signs).sum(dim=-1, keepdim=True)
-    denominator = signed_clamp_min(denominator, eps)
-    weighted_normals = normals * signs
-    outer = normals.unsqueeze(-1) * weighted_normals.unsqueeze(-2)
-    eye = torch.eye(vector_layout.spec.n, device=normals.device, dtype=normals.dtype)
-    return eye - 2.0 * outer / denominator.unsqueeze(-1)
-
-
-def _graded_action_coefficients(
-    matrix: torch.Tensor,
-    *,
-    input_layout: GradeLayout,
-    output_layout: GradeLayout,
-) -> torch.Tensor:
-    coefficients = matrix.new_zeros(matrix.shape[0], output_layout.dim, input_layout.dim)
-    input_by_grade = _positions_by_grade(input_layout)
-
-    for output_position, output_index in enumerate(output_layout.basis_indices):
-        grade = output_index.bit_count()
-        input_positions = input_by_grade.get(grade, ())
-        if not input_positions:
-            continue
-
-        if grade == 0:
-            for input_position in input_positions:
-                if input_layout.basis_indices[input_position] == 0:
-                    coefficients[:, output_position, input_position] = 1.0
-            continue
-
-        output_bits = _basis_bits(output_index, input_layout.spec.n, device=matrix.device)
-        for input_position in input_positions:
-            input_index = input_layout.basis_indices[input_position]
-            input_bits = _basis_bits(input_index, input_layout.spec.n, device=matrix.device)
-            submatrix = torch.index_select(matrix, -2, output_bits)
-            submatrix = torch.index_select(submatrix, -1, input_bits)
-            coefficients[:, output_position, input_position] = torch.linalg.det(submatrix)
-
-    return coefficients
-
-
-def _positions_by_grade(layout: GradeLayout) -> dict[int, tuple[int, ...]]:
-    positions: dict[int, list[int]] = {}
-    for position, index in enumerate(layout.basis_indices):
-        positions.setdefault(index.bit_count(), []).append(position)
-    return {grade: tuple(values) for grade, values in positions.items()}
-
-
-def _basis_bits(index: int, n: int, *, device=None) -> torch.Tensor:
-    bits = [bit for bit in range(n) if index & (1 << bit)]
-    return torch.tensor(bits, dtype=torch.long, device=device)
-
-
 def _basis_bits_tuple(index: int, n: int) -> tuple[int, ...]:
     return tuple(bit for bit in range(n) if index & (1 << bit))
 
@@ -939,60 +825,6 @@ def full_versor_factors(
         right,
         layout=parameter_layout,
     )
-
-
-def full_paired_bivector_factors(
-    algebra,
-    left_weights: torch.Tensor,
-    right_weights: torch.Tensor,
-    *,
-    parameter_layout: GradeLayout,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Return full-lane ``(R_left, reverse(R_right))`` for independent bivectors."""
-    rotor_layout = parameter_layout.spec.layout(range(0, parameter_layout.spec.n + 1, 2))
-    left_rotor = _bivector_exp(
-        algebra,
-        -0.5 * left_weights,
-        parameter_layout=parameter_layout,
-        rotor_layout=rotor_layout,
-    )
-    right_rotor = _bivector_exp(
-        algebra,
-        -0.5 * right_weights,
-        parameter_layout=parameter_layout,
-        rotor_layout=rotor_layout,
-    )
-    right_reverse = algebra.reverse(right_rotor, input_layout=rotor_layout, output_layout=rotor_layout)
-    return canonical_values(algebra, left_rotor, layout=rotor_layout), canonical_values(
-        algebra,
-        right_reverse,
-        layout=rotor_layout,
-    )
-
-
-def paired_bivector_factors(
-    algebra,
-    left_weights: torch.Tensor,
-    right_weights: torch.Tensor,
-    *,
-    parameter_layout: GradeLayout,
-    rotor_layout: GradeLayout,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Return compact ``(R_left, reverse(R_right))`` for paired bivector actions."""
-    left_rotor = _bivector_exp(
-        algebra,
-        -0.5 * left_weights,
-        parameter_layout=parameter_layout,
-        rotor_layout=rotor_layout,
-    )
-    right_rotor = _bivector_exp(
-        algebra,
-        -0.5 * right_weights,
-        parameter_layout=parameter_layout,
-        rotor_layout=rotor_layout,
-    )
-    right_reverse = algebra.reverse(right_rotor, input_layout=rotor_layout, output_layout=rotor_layout)
-    return left_rotor, right_reverse
 
 
 def _bivector_exp(

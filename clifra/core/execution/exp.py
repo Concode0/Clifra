@@ -1422,14 +1422,9 @@ class BivectorExpExecutor(nn.Module):
         return self._left_matrix_exp(values)
 
     def _closed_simple(self, values: torch.Tensor) -> torch.Tensor:
-        alpha = (values * values * self._signs_for(values)).sum(dim=-1, keepdim=True)
+        alpha = (values * values * self.bivector_squared_signs).sum(dim=-1, keepdim=True)
         scalar_part, coeff_part = self._real_cosh_sinhc_sqrt(alpha)
         return scalar_part * self.output_scalar_mask + (values * coeff_part) @ self.bivector_to_output
-
-    def _closed_simple_operator(self, values: torch.Tensor) -> torch.Tensor:
-        alpha = (values * values * self._signs_for(values)).sum(dim=-1, keepdim=True)
-        scalar_part, coeff_part = self._real_cosh_sinhc_sqrt(alpha)
-        return scalar_part * self.operator_scalar_mask + (values * coeff_part) @ self.bivector_to_operator
 
     def _closed_biquadratic(self, values: torch.Tensor) -> torch.Tensor:
         if self.bivector_wedge is None or self.grade4_square is None or self.bivector_grade4_product is None:
@@ -1437,7 +1432,7 @@ class BivectorExpExecutor(nn.Module):
 
         # For n <= 5, B^2 = s + K with K grade-4 and K^2 scalar, so exp(B)
         # closes over {1, B, K, B K}.
-        scalar_square = (values * values * self._signs_for(values)).sum(dim=-1, keepdim=True)
+        scalar_square = (values * values * self.bivector_squared_signs).sum(dim=-1, keepdim=True)
         grade4_part = self.bivector_wedge.forward_compact(values, values)
         grade4_square = self.grade4_square.forward_compact(grade4_part, grade4_part)
         scalar_part, bivector_coeff, grade4_coeff, bivector_grade4_coeff = self._closed_biquadratic_coefficients(
@@ -1702,18 +1697,7 @@ class BivectorExpExecutor(nn.Module):
         cpu_values = values.to(device="cpu")
         return self._left_matrix_exp(cpu_values).to(device=values.device, dtype=values.dtype)
 
-    def _operator_identity(self, values: torch.Tensor) -> torch.Tensor:
-        ones = values.new_ones(*values.shape[:-1], 1)
-        return ones * self.operator_scalar_mask
-
-    def _operator_to_output(self, operator_values: torch.Tensor) -> torch.Tensor:
-        return operator_values @ self.operator_to_output
-
     def _basis_for(self, values: torch.Tensor) -> torch.Tensor:
         return self.operator_eye.to(device=values.device, dtype=values.dtype)
-
-    def _signs_for(self, values: torch.Tensor) -> torch.Tensor:
-        return self.bivector_squared_signs
-
 
 __all__ = ["BivectorExpExecutor"]

@@ -71,7 +71,7 @@ class GradeProductExecutor(nn.Module):
         left_terms = torch.index_select(left, -1, self.left_indices)
         right_terms = torch.index_select(right, -1, self.right_indices)
         left_terms, right_terms = torch.broadcast_tensors(left_terms, right_terms)
-        terms = left_terms * right_terms * self._coefficients_for(left_terms, right_terms)
+        terms = left_terms * right_terms * self.coefficients
 
         output = terms.new_zeros(*terms.shape[:-1], self.output_dim)
         return output.index_add(-1, self.output_positions, terms)
@@ -83,7 +83,7 @@ class GradeProductExecutor(nn.Module):
         left_terms = torch.index_select(left, -1, self.left_compact_positions)
         right_terms = torch.index_select(right, -1, self.right_compact_positions)
         left_terms, right_terms = torch.broadcast_tensors(left_terms, right_terms)
-        terms = left_terms * right_terms * self._coefficients_for(left_terms, right_terms)
+        terms = left_terms * right_terms * self.coefficients
 
         output = terms.new_zeros(*terms.shape[:-1], self.output_dim)
         return output.index_add(-1, self.output_positions, terms)
@@ -164,10 +164,6 @@ class GradeProductExecutor(nn.Module):
         output = compact.new_zeros(*compact.shape[:-1], self.dim)
         return output.index_copy(-1, self.output_basis_indices, compact)
 
-    def _coefficients_for(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
-        return self.coefficients
-
-
 class FullTableProductExecutor(nn.Module):
     """Planner-owned full-layout Cayley-table product executor.
 
@@ -218,7 +214,7 @@ class FullTableProductExecutor(nn.Module):
         self.left_contract.validate(left, name="left")
         self.right_contract.validate(right, name="right")
         right_gathered = right[..., self.cayley_indices]
-        return torch.matmul(left.unsqueeze(-2), right_gathered * self._signs_for(left, right)).squeeze(-2)
+        return torch.matmul(left.unsqueeze(-2), right_gathered * self.signs).squeeze(-2)
 
     def forward_pairwise_compact(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         """Pairwise full-layout product for item-axis operands."""
@@ -228,15 +224,11 @@ class FullTableProductExecutor(nn.Module):
         left = left.expand(*prefix, *left.shape[-2:])
         right = right.expand(*prefix, *right.shape[-2:])
         right_gathered = right[..., self.cayley_indices]
-        weighted_right = right_gathered * self._signs_for(left, right)
+        weighted_right = right_gathered * self.signs
         return torch.einsum("...li,...rik->...lrk", left, weighted_right)
 
     def forward_full(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         """Return full-layout product lanes."""
         return self.forward_compact(left, right)
-
-    def _signs_for(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
-        return self.signs
-
 
 __all__ = ["FullTableProductExecutor", "GradeProductExecutor"]
