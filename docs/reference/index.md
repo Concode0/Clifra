@@ -41,8 +41,6 @@ are omitted.
 
 ::: clifra.core.planning.exp
 
-::: clifra.core.planning.flow
-
 ::: clifra.core.planning.layouts
 
 ::: clifra.core.planning.metric
