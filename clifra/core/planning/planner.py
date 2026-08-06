@@ -598,24 +598,6 @@ class GradePlanner:
             self._paired_bivector_action_plans[key] = plan
         return plan
 
-    def _product_cache_key(self, executor: FullTableProductExecutor | GradeProductExecutor) -> tuple[object, ...]:
-        self._compact_contract(executor.left_layout, "left_layout")
-        self._compact_contract(executor.right_layout, "right_layout")
-        self._compact_contract(executor.output_layout, "output_layout")
-        buffer = getattr(executor, "coefficients", None)
-        if buffer is None:
-            buffer = executor.signs
-        return (
-            self.spec,
-            str(buffer.device),
-            str(buffer.dtype),
-            self.algebra.planning_policy.fingerprint,
-            executor.op,
-            executor.left_grades,
-            executor.right_grades,
-            executor.output_grades,
-        )
-
     def _product_request_cache_key(self, request: ProductRequest) -> tuple[object, ...]:
         return (
             request.spec,
@@ -639,69 +621,6 @@ class GradePlanner:
             device=request.device,
         )
         return cost.decision.route
-
-    def _unary_cache_key(self, executor: GradeUnaryExecutor) -> tuple[object, ...]:
-        self._compact_contract(executor.input_layout, "input_layout")
-        self._compact_contract(executor.output_layout, "output_layout")
-        return (
-            self.spec,
-            str(executor.signs.device),
-            str(executor.signs.dtype),
-            executor.op,
-            executor.input_layout.grades,
-            executor.output_layout.grades,
-        )
-
-    def _signature_norm_squared_cache_key(self, executor: SignatureNormSquaredExecutor) -> tuple[object, ...]:
-        self._compact_contract(executor.input_layout, "input_layout")
-        return (
-            self.spec,
-            str(executor.signs.device),
-            str(executor.signs.dtype),
-            executor.op,
-            executor.input_layout.grades,
-        )
-
-    def _pseudoscalar_product_cache_key(self, executor: PseudoscalarProductExecutor) -> tuple[object, ...]:
-        self._compact_contract(executor.input_layout, "input_layout")
-        self._compact_contract(executor.output_layout, "output_layout")
-        return (
-            self.spec,
-            str(executor.signs.device),
-            str(executor.signs.dtype),
-            executor.op,
-            executor.input_layout.grades,
-            executor.output_layout.grades,
-        )
-
-    def _bivector_exp_cache_key(self, executor: BivectorExpExecutor) -> tuple[object, ...]:
-        self._compact_contract(executor.input_layout, "input_layout")
-        self._compact_contract(executor.output_layout, "output_layout")
-        return (
-            self.spec,
-            str(executor.operator_eye.device),
-            str(executor.operator_eye.dtype),
-            self.algebra.planning_policy.fingerprint,
-            executor.op,
-            executor.spectral_max_planes,
-            executor.spectral_tol_abs,
-            executor.spectral_tol_rel,
-            executor.spectral_dominant_rel,
-            executor.spectral_allow_degenerate,
-            executor.spectral_allow_truncated_degenerate,
-            executor.input_layout.grades,
-            executor.output_layout.grades,
-        )
-
-    def _full_sandwich_action_cache_key(self, executor: FullSandwichActionExecutor) -> tuple[object, ...]:
-        self._compact_contract(executor.layout, "layout")
-        return (
-            self.spec,
-            str(executor.cayley_indices.device),
-            str(executor.left_sign_t.dtype),
-            executor.op,
-            executor.layout.grades,
-        )
 
     def _action_plan_cache_key(
         self,
