@@ -25,8 +25,6 @@ are omitted.
 
 ::: clifra.core.foundation.numerics
 
-::: clifra.core.foundation.validation
-
 ::: clifra.core.runtime.algebra
 
 ::: clifra.core.runtime.energy
@@ -150,8 +148,6 @@ and evidence.
 ::: clifra.analysis.geodesic
 
 ::: clifra.analysis.pipeline
-
-::: clifra.analysis.policy
 
 ::: clifra.analysis.sampler
 

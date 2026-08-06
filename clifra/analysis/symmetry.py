@@ -19,12 +19,12 @@ from clifra.core.runtime.tensors import LaneStorage
 
 from ._types import CONSTANTS, CommutatorResult, TransformationDiagnosticsResult
 from ._utils import (
+    feasibility_record,
     full_grades,
     full_layout_for_analysis,
     grade_layout_for_analysis,
     product_feasibility,
 )
-from .policy import feasibility_record
 
 
 class TransformationDiagnosticsAnalyzer:
@@ -174,7 +174,7 @@ class TransformationDiagnosticsAnalyzer:
             left_layout=vector_layout,
             right_layout=full_layout,
             output_layout=full_layout,
-            max_pairs=CONSTANTS.reflection_product_pairs,
+            limits=CONSTANTS.reflection_limits,
         )
         right_feasible = product_feasibility(
             self.algebra,
@@ -183,7 +183,7 @@ class TransformationDiagnosticsAnalyzer:
             left_layout=full_layout,
             right_layout=vector_layout,
             output_layout=full_layout,
-            max_pairs=CONSTANTS.reflection_product_pairs,
+            limits=CONSTANTS.reflection_limits,
         )
         if not left_feasible or not right_feasible:
             skipped["basis_reflection_scores"] = {
@@ -310,7 +310,7 @@ class TransformationDiagnosticsAnalyzer:
             left_layout=bivector_layout,
             right_layout=full_layout,
             output_layout=full_layout,
-            max_pairs=CONSTANTS.near_commuting_mode_product_pairs,
+            limits=CONSTANTS.near_commuting_mode_limits,
         )
         if not commutator_feasible:
             skipped["near_commuting_modes"] = feasibility_record(commutator_feasible)

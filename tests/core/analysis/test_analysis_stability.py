@@ -13,6 +13,7 @@ from clifra.analysis.signature import RotorProbeSignatureEstimator
 from clifra.analysis.spectral import SpectralAnalyzer
 from clifra.analysis.symmetry import TransformationDiagnosticsAnalyzer
 from clifra.core.config import make_algebra
+from clifra.core.planning.resources import ResourceLimits
 
 pytestmark = pytest.mark.unit
 
@@ -74,7 +75,7 @@ def test_analysis_feasibility_reports_eigensolver_matrix_cap():
     feasibility = full_matrix_feasibility(
         algebra,
         role="adjoint_eigenvalue_magnitudes",
-        max_entries=CONSTANTS.adjoint_matrix_entries,
+        limits=CONSTANTS.adjoint_limits,
         matrix_kind="eigensolver",
     )
 
@@ -90,7 +91,7 @@ def test_analysis_feasibility_reports_product_pair_cap_without_planning():
         algebra,
         role="test_full_gp",
         op="gp",
-        max_pairs=1,
+        limits=ResourceLimits(max_pairs=1),
     )
 
     assert not feasibility
@@ -119,7 +120,7 @@ def test_reflection_analysis_uses_product_feasibility_not_dimension_cap():
 def test_spectral_result_reports_skipped_gp_spectrum(monkeypatch):
     algebra = make_algebra(3, 0, device="cpu", dtype=torch.float32)
     mv = algebra.embed_vector(torch.randn(6, algebra.n))
-    monkeypatch.setattr(CONSTANTS, "gp_spectrum_matrix_entries", 1)
+    monkeypatch.setattr(CONSTANTS, "gp_spectrum_limits", ResourceLimits(max_pairs=1))
 
     result = SpectralAnalyzer(algebra).analyze(mv)
 
@@ -130,7 +131,7 @@ def test_spectral_result_reports_skipped_gp_spectrum(monkeypatch):
 def test_commutator_result_reports_skipped_adjoint_eigenvalue_magnitudes(monkeypatch):
     algebra = make_algebra(3, 0, device="cpu", dtype=torch.float32)
     mv = algebra.embed_vector(torch.randn(6, algebra.n))
-    monkeypatch.setattr(CONSTANTS, "adjoint_matrix_entries", 1)
+    monkeypatch.setattr(CONSTANTS, "adjoint_limits", ResourceLimits(max_pairs=1))
 
     result = CommutatorAnalyzer(algebra).analyze(mv)
 
@@ -141,8 +142,8 @@ def test_commutator_result_reports_skipped_adjoint_eigenvalue_magnitudes(monkeyp
 def test_symmetry_result_reports_skipped_reflections_and_near_commuting_modes(monkeypatch):
     algebra = make_algebra(3, 0, device="cpu", dtype=torch.float32)
     mv = algebra.embed_vector(torch.randn(6, algebra.n))
-    monkeypatch.setattr(CONSTANTS, "reflection_product_pairs", 1)
-    monkeypatch.setattr(CONSTANTS, "near_commuting_mode_product_pairs", 1)
+    monkeypatch.setattr(CONSTANTS, "reflection_limits", ResourceLimits(max_pairs=1))
+    monkeypatch.setattr(CONSTANTS, "near_commuting_mode_limits", ResourceLimits(max_pairs=1))
 
     result = TransformationDiagnosticsAnalyzer(algebra).analyze(mv)
 

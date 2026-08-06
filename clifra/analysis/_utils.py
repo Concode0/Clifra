@@ -5,21 +5,31 @@
 
 from __future__ import annotations
 
-from typing import Iterable
+from dataclasses import dataclass
+from typing import Iterable, Mapping
 
 import torch
 
 from clifra.core.foundation.device import resolve_dtype
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
+from clifra.core.planning.resources import ResourceLimits
 from clifra.core.runtime.tensors import LaneStorage
 
-from .policy import (
-    AnalysisFeasibility,
-    MatrixAnalysisCost,
-    build_product_analysis_cost,
-    evaluate_matrix_cost,
-    evaluate_product_cost,
-)
+
+@dataclass(frozen=True)
+class AnalysisFeasibility:
+    """Resource-limit verdict for one optional analysis operation."""
+
+    supported: bool
+    reason: str
+    details: Mapping[str, object]
+
+    def __bool__(self) -> bool:
+        return self.supported
+
+
+def feasibility_record(feasibility: AnalysisFeasibility) -> dict[str, object]:
+    return {"reason": feasibility.reason, "details": dict(feasibility.details)}
 
 
 def analysis_dtype(dtype=None) -> torch.dtype:
@@ -62,27 +72,33 @@ def matrix_feasibility(
     *,
     role: str,
     matrix_dim: int,
-    max_entries: int,
+    limits: ResourceLimits,
     matrix_kind: str,
     dtype: torch.dtype = torch.float32,
 ) -> AnalysisFeasibility:
-    """Check whether an explicit square matrix is within analysis policy."""
-    return evaluate_matrix_cost(
-        MatrixAnalysisCost(
-            role=str(role),
-            matrix_kind=str(matrix_kind),
-            matrix_dim=int(matrix_dim),
-            max_entries=int(max_entries),
-            dtype=dtype,
-        )
-    )
+    """Check an explicit square matrix against static resource limits."""
+    matrix_dim = int(matrix_dim)
+    matrix_entries = matrix_dim * matrix_dim
+    details = {
+        "role": str(role),
+        "matrix_kind": str(matrix_kind),
+        "matrix_dim": matrix_dim,
+        "matrix_entries": matrix_entries,
+        "max_lanes": limits.max_lanes,
+        "max_entries": limits.max_pairs,
+        "estimated_bytes": matrix_entries * (torch.finfo(dtype).bits // 8),
+        "dtype": str(dtype).removeprefix("torch."),
+    }
+    if matrix_dim > limits.max_lanes or matrix_entries > limits.max_pairs:
+        return AnalysisFeasibility(False, f"{matrix_kind}_matrix_cap", details)
+    return AnalysisFeasibility(True, "ok", details)
 
 
 def full_matrix_feasibility(
     algebra,
     *,
     role: str,
-    max_entries: int,
+    limits: ResourceLimits,
     matrix_kind: str,
 ) -> AnalysisFeasibility:
     """Check a full-layout square matrix materialization."""
@@ -90,7 +106,7 @@ def full_matrix_feasibility(
     verdict = matrix_feasibility(
         role=role,
         matrix_dim=layout.dim,
-        max_entries=max_entries,
+        limits=limits,
         matrix_kind=matrix_kind,
         dtype=getattr(algebra, "dtype", torch.float32),
     )
@@ -107,38 +123,30 @@ def product_feasibility(
     left_layout: GradeLayout,
     right_layout: GradeLayout,
     output_layout: GradeLayout,
-    max_pairs: int,
+    limits: ResourceLimits,
 ) -> AnalysisFeasibility:
-    """Check a planned product using static executor cost metadata."""
-    try:
-        cost = build_product_analysis_cost(
-            algebra,
-            role=role,
-            op=op,
-            left_layout=left_layout,
-            right_layout=right_layout,
-            output_layout=output_layout,
-            max_pairs=max_pairs,
-            dtype=getattr(algebra, "dtype", torch.float32),
-            device=getattr(algebra, "device", "cpu"),
-        )
-    except ValueError as exc:
-        details = {
-            "role": str(role),
-            "op": str(op),
-            "n": left_layout.spec.n,
-            "left_grades": left_layout.grades,
-            "right_grades": right_layout.grades,
-            "output_grades": output_layout.grades,
-            "left_lanes": left_layout.dim,
-            "right_lanes": right_layout.dim,
-            "output_lanes": output_layout.dim,
-            "estimated_pairs": int(left_layout.dim) * int(right_layout.dim),
-            "max_pairs": int(max_pairs),
-        }
-        details["error"] = str(exc)
-        return AnalysisFeasibility(False, "planning_limit", details)
-    return evaluate_product_cost(cost)
+    """Check a product's declared layouts against static resource limits."""
+    max_lanes = max(left_layout.dim, right_layout.dim, output_layout.dim)
+    estimated_pairs = int(left_layout.dim) * int(right_layout.dim)
+    details = {
+        "role": str(role),
+        "op": str(op),
+        "n": left_layout.spec.n,
+        "left_grades": left_layout.grades,
+        "right_grades": right_layout.grades,
+        "output_grades": output_layout.grades,
+        "left_lanes": left_layout.dim,
+        "right_lanes": right_layout.dim,
+        "output_lanes": output_layout.dim,
+        "estimated_pairs": estimated_pairs,
+        "max_lanes": limits.max_lanes,
+        "max_pairs": limits.max_pairs,
+    }
+    if max_lanes > limits.max_lanes:
+        return AnalysisFeasibility(False, "product_lane_cap", details)
+    if estimated_pairs > limits.max_pairs:
+        return AnalysisFeasibility(False, "product_pair_cap", details)
+    return AnalysisFeasibility(True, "ok", details)
 
 
 def full_product_feasibility(
@@ -146,7 +154,7 @@ def full_product_feasibility(
     *,
     role: str,
     op: str,
-    max_pairs: int,
+    limits: ResourceLimits,
 ) -> AnalysisFeasibility:
     """Check a full-layout product used by an optional analysis report."""
     layout = full_layout_for_analysis(algebra)
@@ -157,7 +165,7 @@ def full_product_feasibility(
         left_layout=layout,
         right_layout=layout,
         output_layout=layout,
-        max_pairs=max_pairs,
+        limits=limits,
     )
 
 
@@ -165,14 +173,14 @@ def action_matrix_feasibility_for_spec(
     spec: AlgebraSpec,
     *,
     role: str,
-    max_entries: int,
+    limits: ResourceLimits,
 ) -> AnalysisFeasibility:
     """Check a full-layout action matrix before constructing an algebra host."""
     layout = spec.full_layout()
     verdict = matrix_feasibility(
         role=role,
         matrix_dim=layout.dim,
-        max_entries=max_entries,
+        limits=limits,
         matrix_kind="action",
         dtype=torch.float32,
     )

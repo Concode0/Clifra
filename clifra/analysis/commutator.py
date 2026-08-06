@@ -18,8 +18,7 @@ from clifra.core.runtime.tensors import LaneStorage
 from clifra.utils.mps import safe_linalg_eigvals
 
 from ._types import CONSTANTS, CommutatorResult
-from ._utils import declared_full_product_kwargs, full_matrix_feasibility, full_product_feasibility
-from .policy import feasibility_record
+from ._utils import declared_full_product_kwargs, feasibility_record, full_matrix_feasibility, full_product_feasibility
 
 
 class CommutatorAnalyzer:
@@ -150,14 +149,14 @@ class CommutatorAnalyzer:
         matrix_feasible = full_matrix_feasibility(
             self.algebra,
             role="adjoint_eigenvalue_magnitudes",
-            max_entries=CONSTANTS.adjoint_matrix_entries,
+            limits=CONSTANTS.adjoint_limits,
             matrix_kind="eigensolver",
         )
         product_feasible = full_product_feasibility(
             self.algebra,
             role="adjoint_eigenvalue_magnitudes",
             op="commutator_product",
-            max_pairs=CONSTANTS.analysis_product_pairs,
+            limits=CONSTANTS.analysis_product_limits,
         )
         if not matrix_feasible or not product_feasible:
             skipped["adjoint_eigenvalue_magnitudes"] = {
@@ -196,7 +195,7 @@ class CommutatorAnalyzer:
             self.algebra,
             role="mean_commutator_norm",
             op="commutator_product",
-            max_pairs=CONSTANTS.analysis_product_pairs,
+            limits=CONSTANTS.analysis_product_limits,
         )
         if not full_product:
             layout = self.algebra.layout((1,))

@@ -216,9 +216,9 @@ class RotorProbeSignatureEstimator:
         action_feasible = action_matrix_feasibility_for_spec(
             spec,
             role="signature_probe",
-            max_entries=CONSTANTS.signature_probe_action_matrix_entries,
+            limits=CONSTANTS.signature_probe_limits,
         )
-        max_probe_n = CONSTANTS.signature_probe_action_matrix_lanes.bit_length() - 1
+        max_probe_n = CONSTANTS.signature_probe_limits.max_lanes.bit_length() - 1
         max_input_dim = max_probe_n - CONSTANTS.signature_probe_cga_extra_dims
         if not action_feasible:
             entries = action_feasible.details["matrix_entries"]

@@ -9,11 +9,22 @@ from typing import Dict, List, Optional, Tuple
 
 import torch
 
-GP_SPECTRUM_MATRIX_ENTRIES = 1 << (2 * 10)
-ADJOINT_MATRIX_ENTRIES = 1 << (2 * 8)
-AUTO_FULL_PRODUCT_PAIRS = 1 << 16
-EXPLICIT_ACTION_MATRIX_LANES = 1 << 12
-EXPLICIT_ACTION_MATRIX_ENTRIES = EXPLICIT_ACTION_MATRIX_LANES * EXPLICIT_ACTION_MATRIX_LANES
+from clifra.core.planning.resources import ResourceLimits
+
+
+def _limits(max_lanes: int, max_pairs: int) -> ResourceLimits:
+    return ResourceLimits(
+        warn_lanes=max_lanes,
+        max_lanes=max_lanes,
+        warn_pairs=max_pairs,
+        max_pairs=max_pairs,
+    )
+
+
+GP_SPECTRUM_LIMITS = _limits(1 << 10, 1 << 20)
+ADJOINT_LIMITS = _limits(1 << 8, 1 << 16)
+ANALYSIS_PRODUCT_LIMITS = _limits(1 << 12, 1 << 16)
+SIGNATURE_PROBE_LIMITS = _limits(1 << 12, 1 << 24)
 SIGNATURE_SEARCH_MAX_DIM = 10
 
 
@@ -40,12 +51,11 @@ class AnalysisConstants:
             which a mode is counted as near-commuting.
         basis_reflection_score_threshold: Maximum basis-reflection
             distribution score counted in the report summary.
-        gp_spectrum_matrix_entries: Maximum square-matrix entries for
-            the full geometric-product operator spectrum.
-        adjoint_matrix_entries: Maximum square-matrix entries for the
-            adjoint-operator eigensolver.
-        analysis_product_pairs: Maximum planned product interactions for
-            optional full-layout analysis subroutines.
+        gp_spectrum_limits: Resource limits for the full geometric-product
+            operator spectrum.
+        adjoint_limits: Resource limits for the adjoint-operator eigensolver.
+        analysis_product_limits: Resource limits for optional full-layout
+            analysis products.
         gp_spectrum_n_samples: Number of data samples used when building
             the GP left-multiplication matrix.
     """
@@ -55,14 +65,12 @@ class AnalysisConstants:
     bv_sq_hyperbolic_bound: float = 0.5
     near_commuting_mode_threshold: float = 0.05
     basis_reflection_score_threshold: float = 0.1
-    gp_spectrum_matrix_entries: int = GP_SPECTRUM_MATRIX_ENTRIES
-    gp_spectrum_product_pairs: int = GP_SPECTRUM_MATRIX_ENTRIES
-    adjoint_matrix_entries: int = ADJOINT_MATRIX_ENTRIES
-    analysis_product_pairs: int = AUTO_FULL_PRODUCT_PAIRS
-    reflection_product_pairs: int = AUTO_FULL_PRODUCT_PAIRS
-    near_commuting_mode_product_pairs: int = AUTO_FULL_PRODUCT_PAIRS
-    signature_probe_action_matrix_entries: int = EXPLICIT_ACTION_MATRIX_ENTRIES
-    signature_probe_action_matrix_lanes: int = EXPLICIT_ACTION_MATRIX_LANES
+    gp_spectrum_limits: ResourceLimits = GP_SPECTRUM_LIMITS
+    adjoint_limits: ResourceLimits = ADJOINT_LIMITS
+    analysis_product_limits: ResourceLimits = ANALYSIS_PRODUCT_LIMITS
+    reflection_limits: ResourceLimits = ANALYSIS_PRODUCT_LIMITS
+    near_commuting_mode_limits: ResourceLimits = ANALYSIS_PRODUCT_LIMITS
+    signature_probe_limits: ResourceLimits = SIGNATURE_PROBE_LIMITS
     gp_spectrum_n_samples: int = 50
     default_k_neighbors: int = 8
     default_energy_threshold: float = 0.05
@@ -302,7 +310,7 @@ class AnalysisReport:
 
         if self.dimension is not None:
             d = self.dimension
-            lines.append(f"\n[Dimension]")
+            lines.append("\n[Dimension]")
             lines.append(f"  Broken-stick dimension:       {d.broken_stick_dimension}")
             lines.append(f"  Participation ratio:          {d.participation_ratio:.2f}")
             top_k = min(5, len(d.eigenvalues))
@@ -312,7 +320,7 @@ class AnalysisReport:
         if self.signature_estimate is not None:
             s = self.signature_estimate
             p, q, r = s.estimated_signature
-            lines.append(f"\n[Signature estimate]")
+            lines.append("\n[Signature estimate]")
             lines.append(f"  Candidate Cl({p},{q},{r})")
             lines.append(
                 f"  Connection alignment: {s.connection_alignment:.3f}  dissimilarity: {s.connection_dissimilarity:.3f}"
@@ -322,7 +330,7 @@ class AnalysisReport:
 
         if self.spectral is not None:
             sp = self.spectral
-            lines.append(f"\n[Spectral]")
+            lines.append("\n[Spectral]")
             ge = ", ".join(f"{v:.4f}" for v in sp.grade_energy.tolist())
             lines.append(f"  Grade energy: [{ge}]")
             bv = ", ".join(f"{v:.4f}" for v in sp.mean_bivector_norm.tolist())
@@ -336,7 +344,7 @@ class AnalysisReport:
 
         if self.transformation is not None:
             tr = self.transformation
-            lines.append(f"\n[Transformation diagnostics]")
+            lines.append("\n[Transformation diagnostics]")
             lines.append(f"  Low-energy vector directions: {tr.low_energy_vector_directions}")
             lines.append(f"  Odd-grade energy fraction: {tr.odd_grade_energy_fraction:.4f}")
             lines.append(f"  Near-commuting mode count: {tr.near_commuting_mode_count}")
@@ -349,7 +357,7 @@ class AnalysisReport:
 
         if self.commutator is not None:
             c = self.commutator
-            lines.append(f"\n[Commutator]")
+            lines.append("\n[Commutator]")
             lines.append(f"  Mean commutator norm: {c.mean_commutator_norm:.4f}")
             top = min(5, len(c.adjoint_eigenvalue_magnitudes))
             es = ", ".join(f"{v:.4f}" for v in c.adjoint_eigenvalue_magnitudes[:top].tolist())
@@ -361,7 +369,7 @@ class AnalysisReport:
                 lines.append(f"  Skipped: {', '.join(sorted(c.skipped))}")
 
         if self.metadata:
-            lines.append(f"\n[Metadata]")
+            lines.append("\n[Metadata]")
             for k, v in self.metadata.items():
                 lines.append(f"  {k}: {v}")
 

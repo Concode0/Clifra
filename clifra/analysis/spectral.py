@@ -20,11 +20,11 @@ from clifra.utils.mps import safe_linalg_eigvals
 from ._types import CONSTANTS, SpectralResult
 from ._utils import (
     declared_full_product_kwargs,
+    feasibility_record,
     full_grades,
     full_matrix_feasibility,
     full_product_feasibility,
 )
-from .policy import feasibility_record
 
 
 class SpectralAnalyzer:
@@ -66,14 +66,14 @@ class SpectralAnalyzer:
         gp_matrix = full_matrix_feasibility(
             self.algebra,
             role="gp_action_eigenvalue_magnitudes",
-            max_entries=CONSTANTS.gp_spectrum_matrix_entries,
+            limits=CONSTANTS.gp_spectrum_limits,
             matrix_kind="eigensolver",
         )
         gp_product = full_product_feasibility(
             self.algebra,
             role="gp_action_eigenvalue_magnitudes",
             op="gp",
-            max_pairs=CONSTANTS.gp_spectrum_product_pairs,
+            limits=CONSTANTS.gp_spectrum_limits,
         )
         if gp_matrix and gp_product:
             gp_action_magnitudes = self.gp_action_eigenvalue_magnitudes(mv_data)
