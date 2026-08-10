@@ -1,7 +1,7 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared contracts for continuum solver policies, criteria, and diagnostics."""
+"""Shared contracts for transformation field policies, criteria, and diagnostics."""
 
 from __future__ import annotations
 
@@ -17,33 +17,28 @@ MetricValue = torch.Tensor | float | int | bool
 
 
 @dataclass(frozen=True)
-class ContinuumState:
+class TransformationState:
     """A transformation state produced from a coordinate field input."""
 
-    reference_coordinates: torch.Tensor
-    deformed_coordinates: torch.Tensor
-    reference_multivectors: torch.Tensor
-    deformed_multivectors: torch.Tensor
-    bivector_weights: torch.Tensor
-    spatial_shape: tuple[int, ...]
+    input_coordinates: torch.Tensor
+    transformed_coordinates: torch.Tensor
+    input_multivectors: torch.Tensor
+    transformed_multivectors: torch.Tensor
+    generator_weights: torch.Tensor
+    domain_shape: tuple[int, ...]
     batch_shape: tuple[int, ...]
     field_input: CoordinateFieldInput | None = None
 
     @property
     def coordinate_dim(self) -> int:
-        """Return the Euclidean coordinate lane count."""
-        return int(self.reference_coordinates.shape[-1])
-
-    @property
-    def generator_weights(self) -> torch.Tensor:
-        """Return sampled generators under a field-generic name."""
-        return self.bivector_weights
+        """Return the exposed coordinate lane count."""
+        return int(self.input_coordinates.shape[-1])
 
     def inverse_input(self) -> CoordinateFieldInput | torch.Tensor:
-        """Return deformed values paired with the original sample identity."""
+        """Return transformed values paired with the original sample identity."""
         if self.field_input is None:
-            return self.deformed_coordinates
-        return self.field_input.with_coordinates(self.deformed_coordinates)
+            return self.transformed_coordinates
+        return self.field_input.with_coordinates(self.transformed_coordinates)
 
 
 @dataclass(frozen=True)
@@ -73,10 +68,10 @@ class PolicyResult:
 
 
 @dataclass(frozen=True)
-class SolverEvaluation:
-    """Complete loss decomposition for one solver evaluation."""
+class TransformationEvaluation:
+    """Complete loss decomposition for one transformation field evaluation."""
 
-    state: ContinuumState
+    state: TransformationState
     loss: torch.Tensor
     target: CriterionResult
     policies: tuple[PolicyResult, ...]
@@ -110,10 +105,10 @@ class SolverEvaluation:
 
 
 class TargetCriterion(Protocol):
-    """Differentiable target scoring function injected into a solver engine."""
+    """Differentiable target scoring function injected into a transformation field engine."""
 
-    def __call__(self, engine, state: ContinuumState) -> CriterionResult:
-        """Return a target loss for the current deformation state."""
+    def __call__(self, engine, state: TransformationState) -> CriterionResult:
+        """Return a target loss for the current transformation state."""
         ...
 
 
@@ -126,7 +121,7 @@ class CoordinateTransformationField(Protocol):
         """Transform coordinate values."""
         ...
 
-    def state(self, coordinates: CoordinateLike) -> ContinuumState:
+    def state(self, coordinates: CoordinateLike) -> TransformationState:
         """Return transformed values and generator diagnostics."""
         ...
 
@@ -140,16 +135,16 @@ class CoordinateTransformationField(Protocol):
 
 
 class GeometricPolicy(Protocol):
-    """Mathematical constraint injected into a solver engine."""
+    """Mathematical constraint injected into a transformation field engine."""
 
-    def __call__(self, engine, state: ContinuumState) -> PolicyResult:
+    def __call__(self, engine, state: TransformationState) -> PolicyResult:
         """Return a constraint loss and strictness diagnostics."""
         ...
 
 
-def zero_criterion(state: ContinuumState, *, name: str = "none") -> CriterionResult:
+def zero_criterion(state: TransformationState, *, name: str = "none") -> CriterionResult:
     """Return a zero target result on the state's device and dtype."""
-    return CriterionResult(name=name, loss=state.reference_coordinates.new_zeros(()))
+    return CriterionResult(name=name, loss=state.input_coordinates.new_zeros(()))
 
 
 def _detach_metric(value: MetricValue) -> MetricValue:

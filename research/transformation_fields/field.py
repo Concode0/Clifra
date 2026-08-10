@@ -23,7 +23,7 @@ from .sampling import (
     GeneratorFieldSampler,
     RegularGridGeneratorSampler,
 )
-from .types import ContinuumState
+from .types import TransformationState
 
 
 @dataclass(frozen=True)
@@ -209,40 +209,40 @@ class InvertibleBivectorField(CliffordModule):
         coordinates: torch.Tensor | CoordinateFieldInput,
         *,
         sample_coordinates: torch.Tensor | None = None,
-        spatial_shape: Sequence[int] | None = None,
+        domain_shape: Sequence[int] | None = None,
         return_state: bool = False,
     ):
-        """Deform coordinates and optionally return the full continuum state."""
+        """Transform coordinates and optionally return the full transformation state."""
         state = self.state(
             coordinates,
             sample_coordinates=sample_coordinates,
-            spatial_shape=spatial_shape,
+            domain_shape=domain_shape,
         )
-        return state if return_state else state.deformed_coordinates
+        return state if return_state else state.transformed_coordinates
 
     def state(
         self,
         coordinates: torch.Tensor | CoordinateFieldInput,
         *,
         sample_coordinates: torch.Tensor | None = None,
-        spatial_shape: Sequence[int] | None = None,
-    ) -> ContinuumState:
-        """Return a full deformation state for direct coordinate input."""
+        domain_shape: Sequence[int] | None = None,
+    ) -> TransformationState:
+        """Return the transformation state for the supplied coordinate input."""
         field_input = as_coordinate_field_input(
             coordinates,
             sample_coordinates=sample_coordinates,
-            spatial_shape=spatial_shape,
+            domain_shape=domain_shape,
         )
         self._check_coordinates(field_input.coordinates)
-        reference_mv = self.chart.embed(field_input.coordinates)
-        deformed_mv, sampled = self._apply_path(reference_mv, field_input=field_input, inverse=False)
-        return ContinuumState(
-            reference_coordinates=field_input.coordinates,
-            deformed_coordinates=self.chart.extract(deformed_mv),
-            reference_multivectors=reference_mv,
-            deformed_multivectors=deformed_mv,
-            bivector_weights=sampled.weights,
-            spatial_shape=sampled.spatial_shape,
+        input_mv = self.chart.embed(field_input.coordinates)
+        transformed_mv, sampled = self._apply_path(input_mv, field_input=field_input, inverse=False)
+        return TransformationState(
+            input_coordinates=field_input.coordinates,
+            transformed_coordinates=self.chart.extract(transformed_mv),
+            input_multivectors=input_mv,
+            transformed_multivectors=transformed_mv,
+            generator_weights=sampled.weights,
+            domain_shape=sampled.domain_shape,
             batch_shape=sampled.batch_shape,
             field_input=field_input.retain_sample_identity(),
         )
@@ -252,13 +252,13 @@ class InvertibleBivectorField(CliffordModule):
         coordinates: torch.Tensor | CoordinateFieldInput,
         *,
         sample_coordinates: torch.Tensor | None = None,
-        spatial_shape: Sequence[int] | None = None,
+        domain_shape: Sequence[int] | None = None,
     ) -> torch.Tensor:
         """Apply the reverse rotor path using the supplied sample identity."""
         field_input = as_coordinate_field_input(
             coordinates,
             sample_coordinates=sample_coordinates,
-            spatial_shape=spatial_shape,
+            domain_shape=domain_shape,
         )
         self._check_coordinates(field_input.coordinates)
         values = self.chart.embed(field_input.coordinates)
@@ -270,24 +270,24 @@ class InvertibleBivectorField(CliffordModule):
         coordinates: torch.Tensor | CoordinateFieldInput,
         *,
         sample_coordinates: torch.Tensor | None = None,
-        spatial_shape: Sequence[int] | None = None,
-    ) -> ContinuumState:
+        domain_shape: Sequence[int] | None = None,
+    ) -> TransformationState:
         """Return state metadata for the inverse path."""
         field_input = as_coordinate_field_input(
             coordinates,
             sample_coordinates=sample_coordinates,
-            spatial_shape=spatial_shape,
+            domain_shape=domain_shape,
         )
         self._check_coordinates(field_input.coordinates)
-        reference_mv = self.chart.embed(field_input.coordinates)
-        inverse_mv, sampled = self._apply_path(reference_mv, field_input=field_input, inverse=True)
-        return ContinuumState(
-            reference_coordinates=field_input.coordinates,
-            deformed_coordinates=self.chart.extract(inverse_mv),
-            reference_multivectors=reference_mv,
-            deformed_multivectors=inverse_mv,
-            bivector_weights=sampled.weights,
-            spatial_shape=sampled.spatial_shape,
+        input_mv = self.chart.embed(field_input.coordinates)
+        inverse_mv, sampled = self._apply_path(input_mv, field_input=field_input, inverse=True)
+        return TransformationState(
+            input_coordinates=field_input.coordinates,
+            transformed_coordinates=self.chart.extract(inverse_mv),
+            input_multivectors=input_mv,
+            transformed_multivectors=inverse_mv,
+            generator_weights=sampled.weights,
+            domain_shape=sampled.domain_shape,
             batch_shape=sampled.batch_shape,
             field_input=field_input.retain_sample_identity(),
         )
@@ -297,7 +297,7 @@ class InvertibleBivectorField(CliffordModule):
         coordinates: torch.Tensor | CoordinateFieldInput,
         *,
         sample_coordinates: torch.Tensor | None = None,
-        spatial_shape: Sequence[int] | None = None,
+        domain_shape: Sequence[int] | None = None,
         device=None,
         dtype=None,
     ) -> torch.Tensor:
@@ -305,7 +305,7 @@ class InvertibleBivectorField(CliffordModule):
         field_input = as_coordinate_field_input(
             coordinates,
             sample_coordinates=sample_coordinates,
-            spatial_shape=spatial_shape,
+            domain_shape=domain_shape,
         )
         self._check_coordinates(field_input.coordinates)
         weights = self.generator_sampler.sample(self.bivectors, field_input).weights
@@ -343,13 +343,13 @@ class InvertibleBivectorField(CliffordModule):
         coordinates: torch.Tensor | CoordinateFieldInput,
         *,
         sample_coordinates: torch.Tensor | None = None,
-        spatial_shape: Sequence[int] | None = None,
+        domain_shape: Sequence[int] | None = None,
     ) -> torch.Tensor:
         """Return explicit even-grade rotors evaluated on an input domain."""
         weights = self.weights_for_input(
             coordinates,
             sample_coordinates=sample_coordinates,
-            spatial_shape=spatial_shape,
+            domain_shape=domain_shape,
         )
         return self._rotors_from_weights(weights)
 
@@ -377,7 +377,7 @@ class InvertibleBivectorField(CliffordModule):
             weights = weights.to(device=values.device, dtype=values.dtype)
             sampled = GeneratorFieldSample(
                 weights=weights,
-                spatial_shape=sampled.spatial_shape,
+                domain_shape=sampled.domain_shape,
                 batch_shape=sampled.batch_shape,
             )
 
@@ -405,8 +405,8 @@ class InvertibleBivectorField(CliffordModule):
             batch_rank = len(sampled.batch_shape)
             shared_weights = weights[(slice(None), *((0,) * batch_rank))]
             return (
-                values.reshape(prod(sampled.batch_shape), prod(sampled.spatial_shape), self.vector_layout.dim),
-                shared_weights.reshape(self.path_steps, prod(sampled.spatial_shape), self.num_bivectors),
+                values.reshape(prod(sampled.batch_shape), prod(sampled.domain_shape), self.vector_layout.dim),
+                shared_weights.reshape(self.path_steps, prod(sampled.domain_shape), self.num_bivectors),
             )
 
         sample_count = values[..., 0].numel()

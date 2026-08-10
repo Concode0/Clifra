@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 
 from clifra.core.runtime.algebra import AlgebraContext
-from research.continuum_solver import (
+from research.transformation_fields import (
     CoordinateChart,
     CoordinateFieldInput,
     InvertibleBivectorField,
@@ -69,18 +69,18 @@ def test_regular_grid_path_round_trips_and_reports_shapes():
         init_scale=0.15,
     )
     coordinates = torch.randn(4, 5, 7, 3, dtype=torch.float64)
-    field_input = CoordinateFieldInput(coordinates, spatial_shape=(5, 7))
+    field_input = CoordinateFieldInput(coordinates, domain_shape=(5, 7))
 
     state = field.state(field_input)
     reconstructed = field.inverse(state.inverse_input())
 
-    assert state.bivector_weights.shape == (3, 4, 5, 7, 3)
-    assert state.spatial_shape == (5, 7)
+    assert state.generator_weights.shape == (3, 4, 5, 7, 3)
+    assert state.domain_shape == (5, 7)
     assert state.batch_shape == (4,)
     assert torch.allclose(reconstructed, coordinates, atol=2e-10, rtol=2e-10)
 
 
-def test_coordinate_sampled_path_round_trips_with_persistent_material_labels():
+def test_coordinate_sampled_path_round_trips_with_persistent_sample_labels():
     torch.manual_seed(7)
     algebra = AlgebraContext(2, 0, 0, device="cpu", dtype=torch.float64)
     control_points = torch.tensor([[-1.0], [0.0], [1.0]], dtype=torch.float64)
@@ -92,13 +92,13 @@ def test_coordinate_sampled_path_round_trips_with_persistent_material_labels():
         init_scale=0.4,
     )
     coordinates = torch.randn(8, 2, dtype=torch.float64)
-    material_labels = torch.linspace(-1.0, 1.0, 8, dtype=torch.float64).unsqueeze(-1)
-    field_input = CoordinateFieldInput(coordinates, sample_coordinates=material_labels)
+    sample_labels = torch.linspace(-1.0, 1.0, 8, dtype=torch.float64).unsqueeze(-1)
+    field_input = CoordinateFieldInput(coordinates, sample_coordinates=sample_labels)
 
     state = field.state(field_input)
     reconstructed = field.inverse(state.inverse_input())
 
-    assert state.bivector_weights.shape == (2, 8, 1)
+    assert state.generator_weights.shape == (2, 8, 1)
     assert torch.allclose(reconstructed, coordinates, atol=2e-10, rtol=2e-10)
     with pytest.raises(ValueError, match="requires coordinates"):
         field.weights_for_shape((8,))
@@ -152,7 +152,7 @@ def test_local_rotor_inversion_does_not_claim_global_injectivity():
     state = field.state(coordinates)
     reconstructed = field.inverse(state.inverse_input())
 
-    assert torch.allclose(state.deformed_coordinates[0], state.deformed_coordinates[1], atol=1e-10, rtol=1e-10)
+    assert torch.allclose(state.transformed_coordinates[0], state.transformed_coordinates[1], atol=1e-10, rtol=1e-10)
     assert torch.allclose(reconstructed, coordinates, atol=1e-10, rtol=1e-10)
 
 
@@ -223,7 +223,7 @@ def test_regular_grid_field_does_not_repeat_exponentials_across_batches():
         chart=chart,
         action=action,
     )
-    field_input = CoordinateFieldInput(torch.randn(6, 4, 5, 2, dtype=torch.float64), spatial_shape=(4, 5))
+    field_input = CoordinateFieldInput(torch.randn(6, 4, 5, 2, dtype=torch.float64), domain_shape=(4, 5))
 
     field(field_input)
 
