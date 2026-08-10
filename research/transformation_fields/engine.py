@@ -1,7 +1,7 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
-"""Optimizer-coupled continuum solver engine."""
+"""Optimizer-coupled transformation field engine."""
 
 from __future__ import annotations
 
@@ -17,11 +17,11 @@ from .curriculum import ConstantCurriculum, LossWeightSchedule
 from .inputs import CoordinateLike
 from .logging import MetricLogger
 from .types import (
-    ContinuumState,
     CoordinateTransformationField,
     GeometricPolicy,
-    SolverEvaluation,
     TargetCriterion,
+    TransformationEvaluation,
+    TransformationState,
     zero_criterion,
 )
 
@@ -38,7 +38,7 @@ class OptimizationStepContext:
     the contract required by LBFGS-style optimizers and higher-order methods.
     """
 
-    engine: "ContinuumSolverEngine"
+    engine: "TransformationFieldEngine"
     optimizer: OptimizerLike
     coordinates: CoordinateLike
     loss_fn: Callable[[CoordinateLike], torch.Tensor]
@@ -78,16 +78,16 @@ class OptimizationStepContext:
 
 
 @dataclass(frozen=True)
-class SolverRun:
-    """Result object returned by ``ContinuumSolverEngine.fit``."""
+class TransformationFitResult:
+    """Result object returned by ``TransformationFieldEngine.fit``."""
 
     output: torch.Tensor
-    evaluation: SolverEvaluation
+    evaluation: TransformationEvaluation
     history: MetricLogger
     optimizer: OptimizerLike
 
 
-class ContinuumSolverEngine(CliffordModule):
+class TransformationFieldEngine(CliffordModule):
     """Fit an invertible bivector field against injected targets and policies."""
 
     def __init__(
@@ -120,23 +120,23 @@ class ContinuumSolverEngine(CliffordModule):
         )
 
     def forward(self, coordinates: CoordinateLike) -> torch.Tensor:
-        """Return deformed coordinates."""
+        """Return transformed coordinates."""
         return self.field(coordinates)
 
-    def evaluate(self, coordinates: CoordinateLike) -> SolverEvaluation:
+    def evaluate(self, coordinates: CoordinateLike) -> TransformationEvaluation:
         """Evaluate total loss, target loss, geometric policies, and diagnostics."""
         state = self.field.state(coordinates)
         target = self.target_criterion(self, state) if self.target_criterion is not None else zero_criterion(state)
         policies = tuple(policy(self, state) for policy in self.geometric_policies)
-        target_weight = self._term_weight("target", target.name, state.reference_coordinates, 1.0)
+        target_weight = self._term_weight("target", target.name, state.input_coordinates, 1.0)
         total = target.loss * target_weight
         policy_weights = {}
         for policy in policies:
-            weight = self._term_weight("policy", policy.name, state.reference_coordinates, policy.weight)
+            weight = self._term_weight("policy", policy.name, state.input_coordinates, policy.weight)
             policy_weights[policy.name] = weight
             total = total + policy.loss * weight
         diagnostics = self._diagnostics(state, policies)
-        return SolverEvaluation(
+        return TransformationEvaluation(
             state=state,
             loss=total,
             target=target,
@@ -164,8 +164,8 @@ class ContinuumSolverEngine(CliffordModule):
         compile_backend: str | None = None,
         compile_mode: str | None = None,
         compile_fullgraph: bool = False,
-    ) -> SolverRun:
-        """Optimize the field parameters and return the final deformation."""
+    ) -> TransformationFitResult:
+        """Optimize the transformation field and return the final transformed coordinates."""
         steps = int(steps)
         if steps <= 0:
             raise ValueError(f"steps must be positive, got {steps}")
@@ -214,8 +214,8 @@ class ContinuumSolverEngine(CliffordModule):
 
         self._set_fit_state(steps - 1, steps)
         final = self.evaluate(coordinates)
-        return SolverRun(
-            output=final.state.deformed_coordinates.detach(),
+        return TransformationFitResult(
+            output=final.state.transformed_coordinates.detach(),
             evaluation=final,
             history=history,
             optimizer=optimizer,
@@ -224,19 +224,19 @@ class ContinuumSolverEngine(CliffordModule):
     def _loss_for_fit(self, coordinates: CoordinateLike) -> torch.Tensor:
         state = self.field.state(coordinates)
         target = self.target_criterion(self, state) if self.target_criterion is not None else zero_criterion(state)
-        target_weight = self._term_weight("target", target.name, state.reference_coordinates, 1.0)
+        target_weight = self._term_weight("target", target.name, state.input_coordinates, 1.0)
         total = target.loss * target_weight
         for policy in self.geometric_policies:
             result = policy(self, state)
-            weight = self._term_weight("policy", result.name, state.reference_coordinates, result.weight)
+            weight = self._term_weight("policy", result.name, state.input_coordinates, result.weight)
             total = total + result.loss * weight
         return total
 
     def _term_weight(
-        self, kind: str, name: str, reference: torch.Tensor, base_weight: float | torch.Tensor
+        self, kind: str, name: str, like: torch.Tensor, base_weight: float | torch.Tensor
     ) -> torch.Tensor:
         aliases = (f"{kind}:{name}", name, kind, "*")
-        return self.curriculum.weight(self, aliases, reference, base_weight=base_weight)
+        return self.curriculum.weight(self, aliases, like, base_weight=base_weight)
 
     def fit_step_like(self, values: torch.Tensor) -> torch.Tensor:
         """Return the current fit step as a tensor matching ``values``.
@@ -267,12 +267,12 @@ class ContinuumSolverEngine(CliffordModule):
             self._fit_steps_tensor.fill_(float(steps))
             self._fit_progress_tensor.fill_(float(progress))
 
-    def _diagnostics(self, state: ContinuumState, policies):
+    def _diagnostics(self, state: TransformationState, policies):
         reconstructed = self.field.inverse(state.inverse_input())
-        path_residual = reconstructed - state.reference_coordinates
-        norms = torch.linalg.vector_norm(state.bivector_weights, dim=-1)
-        max_violation = state.reference_coordinates.new_zeros(())
-        strict_observed = torch.ones((), device=state.reference_coordinates.device, dtype=torch.bool)
+        path_residual = reconstructed - state.input_coordinates
+        norms = torch.linalg.vector_norm(state.generator_weights, dim=-1)
+        max_violation = state.input_coordinates.new_zeros(())
+        strict_observed = torch.ones((), device=state.input_coordinates.device, dtype=torch.bool)
         for policy in policies:
             policy_violation = _policy_max_violation(policy)
             max_violation = torch.maximum(max_violation, policy_violation)

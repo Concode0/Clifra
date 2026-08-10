@@ -5,7 +5,7 @@
 
 from .criteria import TargetFieldCriterion
 from .curriculum import ConstantCurriculum, CurriculumKnot, LossWeightSchedule, PhaseCurriculum
-from .engine import ContinuumSolverEngine, OptimizationStepContext, SolverRun
+from .engine import OptimizationStepContext, TransformationFieldEngine, TransformationFitResult
 from .field import CoordinateChart, InvertibleBivectorField
 from .inputs import CoordinateFieldInput, CoordinateLike
 from .logging import MetricLogger, MetricRecord
@@ -18,25 +18,19 @@ from .sampling import (
     RegularGridGeneratorSampler,
 )
 from .types import (
-    ContinuumState,
     CoordinateTransformationField,
     CriterionResult,
     GeometricPolicy,
     PolicyResult,
-    SolverEvaluation,
     TargetCriterion,
+    TransformationEvaluation,
+    TransformationState,
 )
-
-# Generic terminology for callers that do not use continuum-mechanics policies.
-TransformationFieldEngine = ContinuumSolverEngine
-TransformationState = ContinuumState
 
 __all__ = [
     "BivectorNormPolicy",
     "BroadcastGeneratorSampler",
     "ConstantCurriculum",
-    "ContinuumSolverEngine",
-    "ContinuumState",
     "CoordinateChart",
     "CoordinateFieldInput",
     "CoordinateLike",
@@ -56,10 +50,10 @@ __all__ = [
     "PolicyResult",
     "RBFGeneratorSampler",
     "RegularGridGeneratorSampler",
-    "SolverEvaluation",
-    "SolverRun",
     "TargetCriterion",
     "TargetFieldCriterion",
     "TransformationFieldEngine",
+    "TransformationEvaluation",
+    "TransformationFitResult",
     "TransformationState",
 ]

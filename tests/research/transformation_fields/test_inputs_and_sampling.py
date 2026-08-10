@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from research.continuum_solver import (
+from research.transformation_fields import (
     BroadcastGeneratorSampler,
     CoordinateFieldInput,
     RBFGeneratorSampler,
@@ -20,7 +20,7 @@ def test_coordinate_field_input_separates_values_labels_and_topology():
     coordinates = torch.randn(2, 3, 4, 3)
     labels = torch.randn(2, 3, 4, 2)
 
-    field_input = CoordinateFieldInput(coordinates, sample_coordinates=labels, spatial_shape=(3, 4))
+    field_input = CoordinateFieldInput(coordinates, sample_coordinates=labels, domain_shape=(3, 4))
 
     assert field_input.prefix_shape == (2, 3, 4)
     assert field_input.sampling_coordinates is labels
@@ -30,7 +30,7 @@ def test_coordinate_field_input_separates_values_labels_and_topology():
 
 def test_coordinate_field_input_supports_batch_only_topology_and_retains_implicit_identity():
     coordinates = torch.randn(5, 3)
-    field_input = CoordinateFieldInput(coordinates, spatial_shape=())
+    field_input = CoordinateFieldInput(coordinates, domain_shape=())
 
     retained = field_input.retain_sample_identity()
 
@@ -39,28 +39,28 @@ def test_coordinate_field_input_supports_batch_only_topology_and_retains_implici
 
 
 @pytest.mark.parametrize(
-    ("coordinates_shape", "labels_shape", "spatial_shape", "message"),
+    ("coordinates_shape", "labels_shape", "domain_shape", "message"),
     [
         ((2, 3), (3, 1), None, "prefix shape"),
         ((2, 3, 2), None, (2,), "must be a suffix"),
     ],
 )
-def test_coordinate_field_input_rejects_inconsistent_metadata(coordinates_shape, labels_shape, spatial_shape, message):
+def test_coordinate_field_input_rejects_inconsistent_metadata(coordinates_shape, labels_shape, domain_shape, message):
     coordinates = torch.zeros(coordinates_shape)
     labels = None if labels_shape is None else torch.zeros(labels_shape)
 
     with pytest.raises(ValueError, match=message):
-        CoordinateFieldInput(coordinates, sample_coordinates=labels, spatial_shape=spatial_shape)
+        CoordinateFieldInput(coordinates, sample_coordinates=labels, domain_shape=domain_shape)
 
 
-def test_broadcast_sampler_preserves_explicit_batch_and_spatial_metadata():
+def test_broadcast_sampler_preserves_explicit_batch_and_domain_metadata():
     parameters = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
-    field_input = CoordinateFieldInput(torch.zeros(5, 3, 4, 2), spatial_shape=(3, 4))
+    field_input = CoordinateFieldInput(torch.zeros(5, 3, 4, 2), domain_shape=(3, 4))
 
     sampled = BroadcastGeneratorSampler().sample(parameters, field_input)
 
     assert sampled.weights.shape == (2, 5, 3, 4, 2)
-    assert sampled.spatial_shape == (3, 4)
+    assert sampled.domain_shape == (3, 4)
     assert sampled.batch_shape == (5,)
     assert torch.equal(sampled.weights[:, 0, 0, 0], parameters)
 
@@ -82,12 +82,12 @@ def test_regular_grid_sampler_interpolates_parameters_not_coordinates():
 def test_regular_grid_sampler_broadcasts_over_explicit_batch_axes():
     sampler = RegularGridGeneratorSampler((2, 2))
     parameters = torch.randn(2, 2, 2, 3)
-    field_input = CoordinateFieldInput(torch.randn(4, 5, 6, 2), spatial_shape=(5, 6))
+    field_input = CoordinateFieldInput(torch.randn(4, 5, 6, 2), domain_shape=(5, 6))
 
     sampled = sampler.sample(parameters, field_input)
 
     assert sampled.weights.shape == (2, 4, 5, 6, 3)
-    assert sampled.spatial_shape == (5, 6)
+    assert sampled.domain_shape == (5, 6)
     assert sampled.batch_shape == (4,)
     assert torch.equal(sampled.weights[:, 0], sampled.weights[:, -1])
 
@@ -105,7 +105,7 @@ def test_rbf_sampler_is_equivariant_to_point_reordering():
     assert torch.allclose(reordered, original[:, permutation], atol=1e-12, rtol=1e-12)
 
 
-def test_rbf_sampler_uses_material_labels_instead_of_transformed_values():
+def test_rbf_sampler_uses_persistent_sample_labels_instead_of_transformed_values():
     control_points = torch.tensor([[-1.0], [1.0]], dtype=torch.float64)
     sampler = RBFGeneratorSampler(control_points, length_scale=0.25)
     parameters = torch.tensor([[[1.0], [5.0]]], dtype=torch.float64)

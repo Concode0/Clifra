@@ -1,7 +1,7 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
-"""Small generic geometric policies for continuum solver constraints."""
+"""Small generic geometric policies for transformation field constraints."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from dataclasses import dataclass
 import torch
 import torch.nn.functional as F
 
-from .types import ContinuumState, PolicyResult
+from .types import PolicyResult, TransformationState
 
 
 @dataclass(frozen=True)
@@ -22,8 +22,8 @@ class BivectorNormPolicy:
     strict_tolerance: float = 1e-6
     name: str = "bivector_norm"
 
-    def __call__(self, engine, state: ContinuumState) -> PolicyResult:
-        norms = torch.linalg.vector_norm(state.bivector_weights, dim=-1)
+    def __call__(self, engine, state: TransformationState) -> PolicyResult:
+        norms = torch.linalg.vector_norm(state.generator_weights, dim=-1)
         violation = F.relu(norms - float(self.max_norm))
         return PolicyResult(
             name=self.name,
@@ -41,15 +41,15 @@ class BivectorNormPolicy:
 
 @dataclass(frozen=True)
 class InvertiblePathConsistencyPolicy:
-    """Penalize numerical drift after forward deformation followed by inverse path."""
+    """Penalize numerical drift after forward transformation followed by its inverse path."""
 
     weight: float = 1.0
     strict_tolerance: float = 1e-5
     name: str = "invertible_path_consistency"
 
-    def __call__(self, engine, state: ContinuumState) -> PolicyResult:
+    def __call__(self, engine, state: TransformationState) -> PolicyResult:
         reconstructed = engine.field.inverse(state.inverse_input())
-        residual = reconstructed - state.reference_coordinates
+        residual = reconstructed - state.input_coordinates
         mse = residual.square().mean()
         max_abs = residual.abs().amax()
         return PolicyResult(

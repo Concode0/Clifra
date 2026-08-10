@@ -20,7 +20,7 @@ class GeneratorFieldSample:
     """Generator weights evaluated at every input sample."""
 
     weights: torch.Tensor
-    spatial_shape: tuple[int, ...]
+    domain_shape: tuple[int, ...]
     batch_shape: tuple[int, ...]
 
 
@@ -47,8 +47,8 @@ class BroadcastGeneratorSampler(nn.Module):
         _check_parameters(parameters, self.parameter_shape(parameters.shape[0], parameters.shape[-1]))
         view_shape = (parameters.shape[0], *([1] * len(prefix_shape)), parameters.shape[-1])
         weights = parameters.reshape(view_shape).expand(parameters.shape[0], *prefix_shape, parameters.shape[-1])
-        spatial_shape, batch_shape = field_input.topology_shapes()
-        return GeneratorFieldSample(weights=weights, spatial_shape=spatial_shape, batch_shape=batch_shape)
+        domain_shape, batch_shape = field_input.topology_shapes()
+        return GeneratorFieldSample(weights=weights, domain_shape=domain_shape, batch_shape=batch_shape)
 
     def sample_shape(self, parameters: torch.Tensor, prefix_shape: Sequence[int]) -> GeneratorFieldSample:
         coordinates = parameters.new_zeros(*tuple(prefix_shape), 1)
@@ -62,7 +62,7 @@ class RegularGridGeneratorSampler(nn.Module):
         super().__init__()
         self.control_shape = tuple(_positive_int(value, "control_shape") for value in control_shape)
         if not self.control_shape:
-            raise ValueError("control_shape must contain at least one spatial axis")
+            raise ValueError("control_shape must contain at least one domain axis")
         if len(self.control_shape) > 3:
             raise ValueError("regular-grid interpolation supports 1D, 2D, or 3D control lattices")
 
@@ -72,28 +72,28 @@ class RegularGridGeneratorSampler(nn.Module):
     def sample(self, parameters: torch.Tensor, field_input: CoordinateFieldInput) -> GeneratorFieldSample:
         expected = self.parameter_shape(parameters.shape[0], parameters.shape[-1])
         _check_parameters(parameters, expected)
-        spatial_shape, batch_shape = field_input.topology_shapes(default_spatial_rank=len(self.control_shape))
-        grid_weights = self._resize(parameters, spatial_shape)
+        domain_shape, batch_shape = field_input.topology_shapes(default_domain_rank=len(self.control_shape))
+        grid_weights = self._resize(parameters, domain_shape)
         if batch_shape:
-            view_shape = (parameters.shape[0], *([1] * len(batch_shape)), *spatial_shape, parameters.shape[-1])
+            view_shape = (parameters.shape[0], *([1] * len(batch_shape)), *domain_shape, parameters.shape[-1])
             grid_weights = grid_weights.reshape(view_shape).expand(
-                parameters.shape[0], *batch_shape, *spatial_shape, parameters.shape[-1]
+                parameters.shape[0], *batch_shape, *domain_shape, parameters.shape[-1]
             )
-        return GeneratorFieldSample(weights=grid_weights, spatial_shape=spatial_shape, batch_shape=batch_shape)
+        return GeneratorFieldSample(weights=grid_weights, domain_shape=domain_shape, batch_shape=batch_shape)
 
     def sample_shape(self, parameters: torch.Tensor, prefix_shape: Sequence[int]) -> GeneratorFieldSample:
         coordinates = parameters.new_zeros(*tuple(prefix_shape), 1)
         return self.sample(parameters, CoordinateFieldInput(coordinates))
 
-    def _resize(self, parameters: torch.Tensor, spatial_shape: tuple[int, ...]) -> torch.Tensor:
-        if spatial_shape == self.control_shape:
+    def _resize(self, parameters: torch.Tensor, domain_shape: tuple[int, ...]) -> torch.Tensor:
+        if domain_shape == self.control_shape:
             return parameters
         rank = len(self.control_shape)
         mode = {1: "linear", 2: "bilinear", 3: "trilinear"}[rank]
         order = (0, rank + 1, *range(1, rank + 1))
         source = parameters.permute(order).reshape(1, parameters.shape[0] * parameters.shape[-1], *self.control_shape)
-        resized = F.interpolate(source, size=spatial_shape, mode=mode, align_corners=True)
-        resized = resized.reshape(parameters.shape[0], parameters.shape[-1], *spatial_shape)
+        resized = F.interpolate(source, size=domain_shape, mode=mode, align_corners=True)
+        resized = resized.reshape(parameters.shape[0], parameters.shape[-1], *domain_shape)
         return resized.permute(0, *range(2, rank + 2), 1).contiguous()
 
 
@@ -101,7 +101,7 @@ class RBFGeneratorSampler(nn.Module):
     """Sample generators at arbitrary coordinates with normalized Gaussian RBFs.
 
     This sampler removes regular-grid ordering assumptions. For an exactly
-    reversible indexed path, pass persistent material coordinates through
+    reversible indexed path, pass persistent sample coordinates through
     :class:`CoordinateFieldInput` during both forward and inverse evaluation.
     """
 
@@ -138,8 +138,8 @@ class RBFGeneratorSampler(nn.Module):
         squared_distance = (query_values.unsqueeze(-2) - control_points).square().sum(dim=-1)
         basis = torch.softmax(-0.5 * squared_distance / (self.length_scale**2), dim=-1)
         sampled = torch.einsum("...c,scg->s...g", basis, parameters)
-        spatial_shape, batch_shape = field_input.topology_shapes()
-        return GeneratorFieldSample(weights=sampled, spatial_shape=spatial_shape, batch_shape=batch_shape)
+        domain_shape, batch_shape = field_input.topology_shapes()
+        return GeneratorFieldSample(weights=sampled, domain_shape=domain_shape, batch_shape=batch_shape)
 
 
 def _check_parameters(parameters: torch.Tensor, expected_shape: tuple[int, ...]) -> None:

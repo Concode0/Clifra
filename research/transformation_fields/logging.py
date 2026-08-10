@@ -1,7 +1,7 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
-"""Minimal scalar metric logging for continuum solver runs."""
+"""Minimal scalar metric logging for transformation-field optimization runs."""
 
 from __future__ import annotations
 

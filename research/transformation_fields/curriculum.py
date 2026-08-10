@@ -1,7 +1,7 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
-"""Phase-based loss-weight curricula for continuum optimization."""
+"""Phase-based loss-weight curricula for transformation-field optimization."""
 
 from __future__ import annotations
 
@@ -18,11 +18,11 @@ class LossWeightSchedule(Protocol):
         self,
         engine,
         names: str | Sequence[str],
-        reference: torch.Tensor,
+        like: torch.Tensor,
         *,
         base_weight: float | torch.Tensor = 1.0,
     ) -> torch.Tensor:
-        """Return the scheduled weight as a tensor on ``reference``'s device."""
+        """Return the scheduled weight as a tensor on ``like``'s device."""
         ...
 
 
@@ -34,12 +34,12 @@ class ConstantCurriculum:
         self,
         engine,
         names: str | Sequence[str],
-        reference: torch.Tensor,
+        like: torch.Tensor,
         *,
         base_weight: float | torch.Tensor = 1.0,
     ) -> torch.Tensor:
         del engine, names
-        return torch.as_tensor(base_weight, device=reference.device, dtype=reference.dtype)
+        return torch.as_tensor(base_weight, device=like.device, dtype=like.dtype)
 
 
 @dataclass(frozen=True)
@@ -70,29 +70,29 @@ class PhaseCurriculum:
         self,
         engine,
         names: str | Sequence[str],
-        reference: torch.Tensor,
+        like: torch.Tensor,
         *,
         base_weight: float | torch.Tensor = 1.0,
     ) -> torch.Tensor:
         aliases = (names,) if isinstance(names, str) else tuple(names)
-        base = torch.as_tensor(base_weight, device=reference.device, dtype=reference.dtype)
+        base = torch.as_tensor(base_weight, device=like.device, dtype=like.dtype)
         if not self.knots:
             return base
 
         values = [float(_lookup_weight(knot.weights, aliases, base_weight)) for knot in self.knots]
         if len(values) == 1:
-            return reference.new_tensor(values[0])
+            return like.new_tensor(values[0])
 
-        phases = reference.new_tensor([float(knot.phase) for knot in self.knots])
-        weights = reference.new_tensor(values)
-        progress = engine.fit_progress_like(reference).clamp(phases[0], phases[-1])
+        phases = like.new_tensor([float(knot.phase) for knot in self.knots])
+        weights = like.new_tensor(values)
+        progress = engine.fit_progress_like(like).clamp(phases[0], phases[-1])
         left_phase = phases[:-1]
         right_phase = phases[1:]
         left_weight = weights[:-1]
         right_weight = weights[1:]
         amount = ((progress - left_phase) / (right_phase - left_phase).clamp_min(1e-8)).clamp(0.0, 1.0)
         segment_weight = left_weight + amount * (right_weight - left_weight)
-        active = ((progress >= left_phase) & (progress <= right_phase)).to(reference.dtype)
+        active = ((progress >= left_phase) & (progress <= right_phase)).to(like.dtype)
         return (segment_weight * active).sum() / active.sum().clamp_min(1.0)
 
 
