@@ -125,8 +125,3 @@ it is to retain this property.
 Global injectivity remains a property of the assembled field, not of each local
 matrix exponential. Application constraints may encourage it; the validation
 required by the application must establish the property actually claimed.
-
-`research/continuum_solver/examples/bivector_field_basics.py` is the compact
-introduction; it learns a local field and verifies its structural properties.
-`research/continuum_solver/examples/physics_informed_deformation_design.py` is
-the complete physics-informed application.

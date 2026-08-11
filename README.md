@@ -65,39 +65,35 @@ uv run --group docs mkdocs build
 See the [documentation](https://concode0.github.io/clifra/) for tutorials,
 explanations, benchmarks, and the generated API reference.
 
-## Research Showcase: Clifford Transformation Fields
+## Transformation Fields
 
-`research/continuum_solver` is Clifra's clearest end-to-end demonstration of
-layout-directed geometric learning. It turns sampled bivector generators into
-differentiable fields of local Clifford actions. Coordinate values and
-persistent sample labels remain distinct, while samplers, action paths, and
-differentiable objectives are independently configurable.
+`research/transformation_fields` explores differentiable fields of
+Clifford-generated geometric actions. A field samples bivector generators over
+a domain and compiles them into local transformations, while transformed values
+and persistent sampling coordinates remain distinct.
 
-[Bivector field basics](research/continuum_solver/examples/bivector_field_basics.py)
-is the compact introduction. It learns a coordinate-dependent action on
-unordered points and demonstrates metric preservation, labeled inversion, and
-permutation equivariance.
+This separation keeps the construction general: samplers determine how
+generators vary over spatial, material, temporal, or other parameter domains;
+ordered action steps determine how local Clifford transformations compose; and
+user-defined differentiable objectives determine what the field learns.
 
-```bash
-uv run research/continuum_solver/examples/bivector_field_basics.py
-```
-
-[Physics-informed deformation design](research/continuum_solver/examples/physics_informed_deformation_design.py)
-drives the same transformation-field mechanism with material mechanics,
-boundary conditions, guarded optimization, strict validation, and
-visualization. It demonstrates a complete scientific system built from the
-general field construction.
+[Bivector field basics](research/transformation_fields/examples/bivector_field_basics.py)
+is the compact introduction. In `Cl(2,0)`, it learns an RBF-sampled,
+coordinate-dependent rotation field from an analytic target and exposes the
+corresponding bivector generator field. It also verifies indexed inversion and
+sample-permutation equivariance.
 
 ```bash
-uv run --group viz research/continuum_solver/examples/physics_informed_deformation_design.py
+uv run research/transformation_fields/examples/bivector_field_basics.py
 ```
 
-Clifra compiles declared geometric coordinates into differentiable actions. The
-continuum solver assembles those actions into trainable fields, and applications
-decide what those fields learn through their objectives and constraints.
+The example is intentionally small. It introduces the transformation-field
+primitive itself rather than committing it to a particular scientific application: 
+domain labels select local generators, Clifford algebra determines
+the resulting geometric action, and optimization identifies the field from a chosen objective.
 
 See [Why bivector coordinate fields work](https://concode0.github.io/clifra/explanations/transformation-fields/)
-for the derivation, field semantics, and inversion model.
+for the derivation, field semantics, ordered action model, and inversion contract.
 
 ## Contribution
 
