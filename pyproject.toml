@@ -59,6 +59,9 @@ viz = [
     "numpy>=2.0.0",
     "vtk>=9.4.0",
 ]
+fem = [
+    "torch-fem>=0.7.1",
+]
 
 [build-system]
 requires = ["setuptools>=80.10.2"]
