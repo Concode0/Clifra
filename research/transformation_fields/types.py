@@ -28,6 +28,7 @@ class TransformationState:
     domain_shape: tuple[int, ...]
     batch_shape: tuple[int, ...]
     field_input: CoordinateFieldInput | None = None
+    latent_coordinates: torch.Tensor | None = None
 
     @property
     def coordinate_dim(self) -> int:
@@ -39,6 +40,60 @@ class TransformationState:
         if self.field_input is None:
             return self.transformed_coordinates
         return self.field_input.with_coordinates(self.transformed_coordinates)
+
+
+@dataclass(frozen=True)
+class TransformationRollout:
+    """Intermediate states of one forward path and its exact reverse path.
+
+    The leading axis is path time and has ``path_steps + 1`` entries. The
+    forward trajectory starts at the input. The inverse trajectory starts at
+    the forward endpoint and applies the same sampled generators in reverse
+    order with opposite signs.
+    """
+
+    forward_coordinates: torch.Tensor
+    inverse_coordinates: torch.Tensor
+    forward_multivectors: torch.Tensor
+    inverse_multivectors: torch.Tensor
+    generator_weights: torch.Tensor
+    latent_coordinates: torch.Tensor | None
+    field_input: CoordinateFieldInput | None = None
+
+    @property
+    def forward(self) -> torch.Tensor:
+        """Alias for the forward coordinate trajectory."""
+        return self.forward_coordinates
+
+    @property
+    def inverse(self) -> torch.Tensor:
+        """Alias for the inverse coordinate trajectory."""
+        return self.inverse_coordinates
+
+    @property
+    def backward(self) -> torch.Tensor:
+        """Compatibility alias for the inverse coordinate trajectory."""
+        return self.inverse_coordinates
+
+    @property
+    def backward_coordinates(self) -> torch.Tensor:
+        """Compatibility alias for the inverse coordinate trajectory."""
+        return self.inverse_coordinates
+
+    @property
+    def backward_multivectors(self) -> torch.Tensor:
+        """Compatibility alias for the inverse multivector trajectory."""
+        return self.inverse_multivectors
+
+    @property
+    def coordinates(self) -> torch.Tensor:
+        """Return the complete forward-then-inverse round-trip trajectory."""
+        return torch.cat((self.forward_coordinates, self.inverse_coordinates[1:]), dim=0)
+
+    @property
+    def steps(self) -> int:
+        """Return the number of generator steps in each direction."""
+        return int(self.forward_coordinates.shape[0] - 1)
 
 
 @dataclass(frozen=True)
@@ -127,6 +182,10 @@ class CoordinateTransformationField(Protocol):
 
     def inverse(self, coordinates: CoordinateLike) -> torch.Tensor:
         """Evaluate the field's declared inverse contract."""
+        ...
+
+    def rollout(self, coordinates: CoordinateLike) -> TransformationRollout:
+        """Expose one field application's forward path and reverse retracing."""
         ...
 
     def parameters(self, recurse: bool = True) -> Iterator[torch.nn.Parameter]:

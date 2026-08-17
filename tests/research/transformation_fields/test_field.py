@@ -11,8 +11,10 @@ import torch.nn as nn
 
 from clifra.core.runtime.algebra import AlgebraContext
 from research.transformation_fields import (
+    ConformalChart,
     CoordinateChart,
     CoordinateFieldInput,
+    GeneratorSubspace,
     InvertibleBivectorField,
     RBFGeneratorSampler,
 )
@@ -228,3 +230,100 @@ def test_regular_grid_field_does_not_repeat_exponentials_across_batches():
     field(field_input)
 
     assert action.weight_rows == [20, 20]
+
+
+def test_conformal_chart_uses_null_embedding_and_field_round_trips():
+    torch.manual_seed(23)
+    algebra = AlgebraContext(3, 1, 0, device="cpu", dtype=torch.float64)
+    chart = CoordinateChart.conformal(algebra, 2)
+    field = InvertibleBivectorField(algebra, 2, chart=chart, path_steps=2, init_scale=0.03)
+    coordinates = torch.randn(7, 2, dtype=torch.float64)
+
+    embedded = chart.embed(coordinates)
+    scalar_layout = algebra.layout((0,))
+    squared = algebra.geometric_product(
+        embedded,
+        embedded,
+        left_layout=chart.layout,
+        right_layout=chart.layout,
+        output_layout=scalar_layout,
+    )
+    state = field.state(coordinates)
+    reconstructed = field.inverse(state.inverse_input())
+
+    assert isinstance(chart, ConformalChart)
+    assert torch.allclose(squared, torch.zeros_like(squared), atol=1e-11, rtol=1e-11)
+    assert torch.allclose(chart.extract(embedded), coordinates, atol=1e-12, rtol=1e-12)
+    assert torch.allclose(reconstructed, coordinates, atol=2e-10, rtol=2e-10)
+
+
+def test_generator_subspace_maps_and_exposes_sampled_latent_coordinates():
+    algebra = AlgebraContext(3, 0, 0, device="cpu", dtype=torch.float64)
+    subspace = GeneratorSubspace.from_lanes(3, (0, 2), dtype=torch.float64)
+    field = InvertibleBivectorField(
+        algebra,
+        3,
+        path_steps=2,
+        control_shape=(2,),
+        generator_subspace=subspace,
+        init_scale=0.0,
+    )
+    with torch.no_grad():
+        field.latent_coordinates.copy_(
+            torch.tensor(
+                [[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]],
+                dtype=torch.float64,
+            )
+        )
+    coordinates = torch.randn(5, 3, dtype=torch.float64)
+
+    state = field.state(coordinates)
+
+    assert field.latent_coordinates.shape == (2, 2, 2)
+    assert field.bivectors.shape == (2, 2, 3)
+    assert state.latent_coordinates is not None
+    assert state.latent_coordinates.shape == (2, 5, 2)
+    assert state.generator_weights.shape == (2, 5, 3)
+    assert torch.equal(state.generator_weights[..., 0], state.latent_coordinates[..., 0])
+    assert torch.equal(state.generator_weights[..., 1], torch.zeros_like(state.generator_weights[..., 1]))
+    assert torch.equal(state.generator_weights[..., 2], state.latent_coordinates[..., 1])
+
+
+def test_rollout_exposes_internal_path_and_inverse_retracing():
+    algebra = AlgebraContext(2, 0, 0, device="cpu", dtype=torch.float64)
+    controls = torch.tensor([[-1.0], [1.0]], dtype=torch.float64)
+    field = InvertibleBivectorField(
+        algebra,
+        2,
+        path_steps=3,
+        generator_sampler=RBFGeneratorSampler(controls, length_scale=0.3),
+        init_scale=0.0,
+    )
+    with torch.no_grad():
+        field.latent_coordinates[..., 0] = torch.tensor(
+            [[-0.2, 0.3], [0.1, -0.15], [0.25, 0.05]],
+            dtype=torch.float64,
+        )
+    coordinates = torch.tensor([[1.0, 0.0], [0.0, 1.0]], dtype=torch.float64)
+    labels = torch.tensor([[-1.0], [1.0]], dtype=torch.float64)
+    field_input = CoordinateFieldInput(coordinates, sample_coordinates=labels)
+
+    state = field.state(field_input)
+    rollout = field.rollout(field_input)
+
+    assert rollout.steps == field.path_steps
+    assert rollout.forward.shape == (field.path_steps + 1, 2, 2)
+    assert rollout.inverse_coordinates.shape == (field.path_steps + 1, 2, 2)
+    assert rollout.forward_multivectors.shape == (field.path_steps + 1, 2, field.vector_layout.dim)
+    assert rollout.inverse_multivectors.shape == (field.path_steps + 1, 2, field.vector_layout.dim)
+    assert rollout.coordinates.shape == (2 * field.path_steps + 1, 2, 2)
+    assert rollout.latent_coordinates is not None
+    assert torch.equal(rollout.generator_weights, state.generator_weights)
+    assert torch.equal(rollout.latent_coordinates, state.latent_coordinates)
+    assert torch.equal(rollout.forward[0], coordinates)
+    assert torch.allclose(rollout.forward[-1], state.transformed_coordinates, atol=1e-12, rtol=1e-12)
+    assert torch.equal(rollout.inverse_coordinates[0], rollout.forward[-1])
+    assert torch.allclose(rollout.inverse_coordinates[-1], coordinates, atol=1e-12, rtol=1e-12)
+    assert torch.allclose(rollout.forward, rollout.inverse_coordinates.flip(0), atol=1e-12, rtol=1e-12)
+    assert rollout.field_input is not None
+    assert rollout.field_input.sample_coordinates is labels

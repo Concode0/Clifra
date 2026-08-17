@@ -128,10 +128,7 @@ def test_multi_graded_linear_action_matches_stacked_single_actions():
     executor = GradedLinearActionExecutor(input_layout=layout, output_layout=layout)
     actual = executor.multi(values, matrices)
     expected = torch.stack(
-        [
-            executor(values, matrix.unsqueeze(0).expand(values.shape[-2], -1, -1))
-            for matrix in matrices
-        ],
+        [executor(values, matrix.unsqueeze(0).expand(values.shape[-2], -1, -1)) for matrix in matrices],
         dim=-2,
     )
 

@@ -22,6 +22,7 @@ class GeneratorFieldSample:
     weights: torch.Tensor
     domain_shape: tuple[int, ...]
     batch_shape: tuple[int, ...]
+    latent_coordinates: torch.Tensor | None = None
 
 
 class GeneratorFieldSampler(Protocol):

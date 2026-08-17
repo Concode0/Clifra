@@ -58,6 +58,7 @@ def build_signature_norm_squared_plan(
         signs=torch.tensor(signs, dtype=dtype, device=device),
     )
 
+
 __all__ = [
     "SignatureNormSquaredPlan",
     "build_signature_norm_squared_plan",

@@ -1522,11 +1522,7 @@ class BivectorExpExecutor(nn.Module):
             complex_cosh_coalescing = complex_mask & (complex_nu <= self.cosh_divided_difference_limit)
             complex_sinhc_coalescing = complex_mask & (complex_nu <= self.sinhc_divided_difference_limit)
             center_mask = (
-                base_mask
-                | cosh_coalescing
-                | sinhc_coalescing
-                | complex_cosh_coalescing
-                | complex_sinhc_coalescing
+                base_mask | cosh_coalescing | sinhc_coalescing | complex_cosh_coalescing | complex_sinhc_coalescing
             )
         else:
             center_mask = base_mask
@@ -1699,5 +1695,6 @@ class BivectorExpExecutor(nn.Module):
 
     def _basis_for(self, values: torch.Tensor) -> torch.Tensor:
         return self.operator_eye.to(device=values.device, dtype=values.dtype)
+
 
 __all__ = ["BivectorExpExecutor"]

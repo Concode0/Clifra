@@ -200,10 +200,7 @@ def test_bivector_exp_closed_biquadratic_coalescing_complex_vjp_matches_referenc
 
 @pytest.mark.parametrize(
     ("signature", "blades"),
-    [
-        ((2, 2, 0), (5, 10)),
-        ((3, 1, 0), (3, 12))
-    ],
+    [((2, 2, 0), (5, 10)), ((3, 1, 0), (3, 12))],
 )
 @pytest.mark.parametrize(
     "limit_name",

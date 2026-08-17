@@ -169,6 +169,7 @@ class RightContractionLayer(ProductLayer):
     def __init__(self, algebra, **kwargs):
         super().__init__(algebra, op="right_contraction", **kwargs)
 
+
 def _resolve_optional_contract(
     algebra,
     layout: GradeLayout | None,

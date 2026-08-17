@@ -15,6 +15,7 @@ import torch.nn as nn
 from clifra.core.foundation.manifold import MANIFOLD_SPIN, tag_manifold
 from clifra.core.foundation.module import AlgebraLike, CliffordModule
 from clifra.core.foundation.numerics import signed_clamp_min
+from clifra.layers.adapters import ConformalEmbedding
 
 from .inputs import CoordinateFieldInput, as_coordinate_field_input
 from .sampling import (
@@ -23,7 +24,7 @@ from .sampling import (
     GeneratorFieldSampler,
     RegularGridGeneratorSampler,
 )
-from .types import TransformationState
+from .types import TransformationRollout, TransformationState
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,11 @@ class CoordinateChart:
         layout = algebra.layout((1,))
         positions = _basis_positions(layout, tuple(1 << bit for bit in range(d)))
         return cls(algebra=algebra, coordinate_dim=d, layout=layout, coordinate_positions=positions)
+
+    @classmethod
+    def conformal(cls, algebra: AlgebraLike, coordinate_dim: int) -> "ConformalChart":
+        """Use clifra's conformal embedding as a Euclidean coordinate chart."""
+        return ConformalChart(algebra, coordinate_dim)
 
     @classmethod
     def projective(cls, algebra: AlgebraLike, coordinate_dim: int) -> "CoordinateChart":
@@ -112,6 +118,119 @@ class CoordinateChart:
         return torch.tensor(self.coordinate_positions, dtype=torch.long, device=device)
 
 
+class ConformalChart(CliffordModule):
+    """Euclidean chart backed by :class:`clifra.layers.ConformalEmbedding`.
+
+    Coordinates in ``R^d`` are lifted to null grade-1 points in
+    ``Cl(d + 1, 1)``. Rotor paths can therefore represent conformal motions,
+    including translations and dilations, while callers continue to work with
+    ordinary Euclidean coordinate tensors.
+    """
+
+    homogeneous_position = None
+
+    def __init__(self, algebra: AlgebraLike, coordinate_dim: int):
+        super().__init__(algebra)
+        self.coordinate_dim = _positive_int(coordinate_dim, "coordinate_dim")
+        self.layout = algebra.layout((1,))
+        self.embedding = ConformalEmbedding(
+            algebra,
+            euclidean_dim=self.coordinate_dim,
+            layout=self.layout,
+        ).to(device=algebra.device, dtype=algebra.dtype)
+
+    def embed(self, coordinates: torch.Tensor) -> torch.Tensor:
+        """Lift Euclidean coordinates to conformal null points."""
+        return self.embedding.embed(coordinates)
+
+    def extract(self, values: torch.Tensor) -> torch.Tensor:
+        """Normalize conformal points and expose Euclidean coordinates."""
+        return self.embedding.extract(values)
+
+    def metric_signs(self, *, device=None, dtype=None) -> torch.Tensor:
+        """Return the positive Euclidean metric of the exposed coordinates."""
+        dtype = self.algebra.dtype if dtype is None else dtype
+        return torch.ones(self.coordinate_dim, device=device, dtype=dtype)
+
+
+class GeneratorSubspace(nn.Module):
+    """Fixed linear map from latent coordinates to bivector coefficients.
+
+    ``mapping`` has shape ``[generator_dim, latent_dim]`` and realizes
+    ``B = mapping @ z``. The leading dimensions of ``z`` are unrestricted.
+    A selector subspace can be created with :meth:`from_lanes`.
+    """
+
+    def __init__(self, mapping: torch.Tensor):
+        super().__init__()
+        if not isinstance(mapping, torch.Tensor):
+            mapping = torch.as_tensor(mapping, dtype=torch.get_default_dtype())
+        if mapping.ndim != 2 or mapping.shape[0] < 1 or mapping.shape[1] < 1:
+            raise ValueError("generator subspace mapping must have shape [generator_dim, latent_dim]")
+        if not mapping.dtype.is_floating_point:
+            mapping = mapping.to(dtype=torch.get_default_dtype())
+        if not torch.isfinite(mapping).all():
+            raise ValueError("generator subspace mapping must contain only finite values")
+        self.register_buffer("mapping", mapping.detach().clone())
+
+    @classmethod
+    def from_lanes(
+        cls,
+        generator_dim: int,
+        lanes: Sequence[int],
+        *,
+        device=None,
+        dtype=None,
+    ) -> "GeneratorSubspace":
+        """Select compact bivector lane positions as latent generators."""
+        generator_dim = _positive_int(generator_dim, "generator_dim")
+        lane_tuple = tuple(int(lane) for lane in lanes)
+        if not lane_tuple:
+            raise ValueError("lanes must contain at least one generator lane")
+        if len(set(lane_tuple)) != len(lane_tuple):
+            raise ValueError("lanes must not contain duplicates")
+        invalid = [lane for lane in lane_tuple if lane < 0 or lane >= generator_dim]
+        if invalid:
+            raise ValueError(f"generator lanes must be in [0, {generator_dim}), got {invalid}")
+        dtype = torch.get_default_dtype() if dtype is None else dtype
+        mapping = torch.zeros(generator_dim, len(lane_tuple), device=device, dtype=dtype)
+        mapping[torch.tensor(lane_tuple, device=device), torch.arange(len(lane_tuple), device=device)] = 1.0
+        return cls(mapping)
+
+    @classmethod
+    def from_basis_indices(cls, layout, basis_indices: Sequence[int], *, device=None, dtype=None) -> "GeneratorSubspace":
+        """Select generators by canonical bivector basis-blade indices."""
+        positions = _basis_positions(layout, tuple(int(index) for index in basis_indices))
+        return cls.from_lanes(layout.dim, positions, device=device, dtype=dtype)
+
+    @property
+    def generator_dim(self) -> int:
+        return int(self.mapping.shape[0])
+
+    @property
+    def latent_dim(self) -> int:
+        return int(self.mapping.shape[1])
+
+    def forward(self, latent_coordinates: torch.Tensor) -> torch.Tensor:
+        """Map ``[..., latent_dim]`` coordinates into generator lanes."""
+        if latent_coordinates.shape[-1] != self.latent_dim:
+            raise ValueError(
+                f"latent coordinate dimension must be {self.latent_dim}, got {latent_coordinates.shape[-1]}"
+            )
+        mapping = self.mapping.to(device=latent_coordinates.device, dtype=latent_coordinates.dtype)
+        return torch.matmul(latent_coordinates, mapping.transpose(0, 1))
+
+    def encode(self, generator_weights: torch.Tensor) -> torch.Tensor:
+        """Return least-squares latent coordinates for generator weights."""
+        if generator_weights.shape[-1] != self.generator_dim:
+            raise ValueError(f"generator dimension must be {self.generator_dim}, got {generator_weights.shape[-1]}")
+        mapping = self.mapping.to(device=generator_weights.device, dtype=generator_weights.dtype)
+        return torch.matmul(generator_weights, torch.linalg.pinv(mapping).transpose(0, 1))
+
+
+GeneratorSubspaceMap = GeneratorSubspace
+
+
 class InvertibleBivectorField(CliffordModule):
     """Parameterized coordinate transformation built from invertible rotor paths.
 
@@ -139,9 +258,11 @@ class InvertibleBivectorField(CliffordModule):
         path_steps: int = 1,
         control_shape: Sequence[int] | None = None,
         projective: bool = False,
+        conformal: bool = False,
         init_scale: float = 1e-3,
         generator_sampler: GeneratorFieldSampler | nn.Module | None = None,
-        chart: CoordinateChart | None = None,
+        generator_subspace: GeneratorSubspace | torch.Tensor | Sequence[int] | None = None,
+        chart: CoordinateChart | ConformalChart | None = None,
         action: nn.Module | None = None,
     ):
         super().__init__(algebra)
@@ -149,6 +270,8 @@ class InvertibleBivectorField(CliffordModule):
             raise ValueError("InvertibleBivectorField requires an algebra with at least two basis vectors")
         self.coordinate_dim = _positive_int(coordinate_dim, "coordinate_dim")
         self.path_steps = _positive_int(path_steps, "path_steps")
+        if projective and conformal:
+            raise ValueError("projective and conformal charts are mutually exclusive")
         if chart is not None:
             if chart.algebra.spec != algebra.spec:
                 raise ValueError("chart and field algebra signatures must match")
@@ -156,20 +279,30 @@ class InvertibleBivectorField(CliffordModule):
                 raise ValueError(
                     f"chart coordinate_dim={chart.coordinate_dim} does not match field coordinate_dim={self.coordinate_dim}"
                 )
-            if projective and chart.homogeneous_position is None:
+            homogeneous_position = getattr(chart, "homogeneous_position", None)
+            if projective and homogeneous_position is None:
                 raise ValueError("projective=True requires a chart with a homogeneous coordinate")
+            if conformal and not isinstance(chart, ConformalChart):
+                raise ValueError("conformal=True requires a ConformalChart")
             self.chart = chart
-            self.projective = chart.homogeneous_position is not None
+            self.projective = homogeneous_position is not None
+            self.conformal = isinstance(chart, ConformalChart)
         else:
             self.projective = bool(projective)
-            self.chart = (
-                CoordinateChart.projective(algebra, self.coordinate_dim)
-                if self.projective
-                else CoordinateChart.direct(algebra, self.coordinate_dim)
-            )
+            self.conformal = bool(conformal)
+            if self.projective:
+                self.chart = CoordinateChart.projective(algebra, self.coordinate_dim)
+            elif self.conformal:
+                self.chart = CoordinateChart.conformal(algebra, self.coordinate_dim)
+            else:
+                self.chart = CoordinateChart.direct(algebra, self.coordinate_dim)
         self.vector_layout = self.chart.layout
         self.bivector_layout = algebra.layout((2,))
         self.num_bivectors = self.bivector_layout.dim
+        self.generator_subspace = self._resolve_generator_subspace(generator_subspace)
+        self.latent_dim = (
+            self.num_bivectors if self.generator_subspace is None else self.generator_subspace.latent_dim
+        )
         if action is None:
             action = algebra.plan_versor_action(
                 grade=2,
@@ -199,10 +332,22 @@ class InvertibleBivectorField(CliffordModule):
             if isinstance(self.generator_sampler, RegularGridGeneratorSampler)
             else None
         )
-        parameter_shape = self.generator_sampler.parameter_shape(self.path_steps, self.num_bivectors)
-        self.bivectors = nn.Parameter(torch.empty(parameter_shape, device=algebra.device, dtype=algebra.dtype))
-        tag_manifold(self.bivectors, MANIFOLD_SPIN)
-        nn.init.normal_(self.bivectors, mean=0.0, std=float(init_scale))
+        parameter_shape = self.generator_sampler.parameter_shape(self.path_steps, self.latent_dim)
+        self._latent_coordinates = nn.Parameter(
+            torch.empty(parameter_shape, device=algebra.device, dtype=algebra.dtype)
+        )
+        tag_manifold(self._latent_coordinates, MANIFOLD_SPIN)
+        nn.init.normal_(self._latent_coordinates, mean=0.0, std=float(init_scale))
+
+    @property
+    def latent_coordinates(self) -> nn.Parameter:
+        """Return trainable coordinates in the declared generator subspace."""
+        return self._latent_coordinates
+
+    @property
+    def bivectors(self) -> torch.Tensor:
+        """Return stored latent parameters mapped into compact bivector lanes."""
+        return self._map_generators(self._latent_coordinates)
 
     def forward(
         self,
@@ -245,6 +390,7 @@ class InvertibleBivectorField(CliffordModule):
             domain_shape=sampled.domain_shape,
             batch_shape=sampled.batch_shape,
             field_input=field_input.retain_sample_identity(),
+            latent_coordinates=sampled.latent_coordinates,
         )
 
     def inverse(
@@ -290,6 +436,55 @@ class InvertibleBivectorField(CliffordModule):
             domain_shape=sampled.domain_shape,
             batch_shape=sampled.batch_shape,
             field_input=field_input.retain_sample_identity(),
+            latent_coordinates=sampled.latent_coordinates,
+        )
+
+    def rollout(
+        self,
+        coordinates: torch.Tensor | CoordinateFieldInput,
+        *,
+        sample_coordinates: torch.Tensor | None = None,
+        domain_shape: Sequence[int] | None = None,
+    ) -> TransformationRollout:
+        """Expose every internal path state and its inverse retracing.
+
+        The forward trajectory applies each of the ``path_steps`` sampled
+        generators once. The inverse trajectory starts from the exact final
+        forward multivector, then negates the same generators and applies them
+        in reverse order. Sampling occurs once at the input identity.
+        """
+        field_input = as_coordinate_field_input(
+            coordinates,
+            sample_coordinates=sample_coordinates,
+            domain_shape=domain_shape,
+        )
+        self._check_coordinates(field_input.coordinates)
+        persistent_input = field_input.retain_sample_identity()
+        initial_mv = self.chart.embed(field_input.coordinates)
+        sampled = self._sample_for_values(initial_mv, persistent_input)
+        flat, flat_weights = self._execution_view(initial_mv, sampled.weights, sampled)
+        prefix_shape = tuple(initial_mv.shape[:-1])
+
+        forward_multivectors = [initial_mv]
+        for step in range(self.path_steps):
+            flat = self.action(flat, flat_weights[step])
+            forward_multivectors.append(flat.reshape(*prefix_shape, self.vector_layout.dim))
+
+        inverse_multivectors = [forward_multivectors[-1]]
+        for step in range(self.path_steps - 1, -1, -1):
+            flat = self.action(flat, -flat_weights[step])
+            inverse_multivectors.append(flat.reshape(*prefix_shape, self.vector_layout.dim))
+
+        forward_mv = torch.stack(forward_multivectors, dim=0)
+        inverse_mv = torch.stack(inverse_multivectors, dim=0)
+        return TransformationRollout(
+            forward_coordinates=self.chart.extract(forward_mv),
+            inverse_coordinates=self.chart.extract(inverse_mv),
+            forward_multivectors=forward_mv,
+            inverse_multivectors=inverse_mv,
+            generator_weights=sampled.weights,
+            latent_coordinates=sampled.latent_coordinates,
+            field_input=persistent_input,
         )
 
     def weights_for_input(
@@ -308,8 +503,29 @@ class InvertibleBivectorField(CliffordModule):
             domain_shape=domain_shape,
         )
         self._check_coordinates(field_input.coordinates)
-        weights = self.generator_sampler.sample(self.bivectors, field_input).weights
+        weights = self._sample_generators(field_input).weights
         return weights.to(device=device, dtype=dtype) if device is not None or dtype is not None else weights
+
+    def latent_for_input(
+        self,
+        coordinates: torch.Tensor | CoordinateFieldInput,
+        *,
+        sample_coordinates: torch.Tensor | None = None,
+        domain_shape: Sequence[int] | None = None,
+        device=None,
+        dtype=None,
+    ) -> torch.Tensor:
+        """Evaluate sampled latent generator coordinates for an input domain."""
+        field_input = as_coordinate_field_input(
+            coordinates,
+            sample_coordinates=sample_coordinates,
+            domain_shape=domain_shape,
+        )
+        self._check_coordinates(field_input.coordinates)
+        latent = self.generator_sampler.sample(self.latent_coordinates, field_input).weights
+        return latent.to(device=device, dtype=dtype) if device is not None or dtype is not None else latent
+
+    latent_coordinates_for_input = latent_for_input
 
     def weights_for_shape(self, prefix_shape: Sequence[int], *, device=None, dtype=None) -> torch.Tensor:
         """Return weights for shape-only samplers retained by the legacy API.
@@ -321,10 +537,22 @@ class InvertibleBivectorField(CliffordModule):
         sample_shape = getattr(self.generator_sampler, "sample_shape", None)
         if not callable(sample_shape):
             raise ValueError("this generator sampler requires coordinates; use weights_for_input()")
-        weights = sample_shape(self.bivectors, prefix_shape).weights
+        latent = sample_shape(self.latent_coordinates, prefix_shape).weights
+        weights = self._map_generators(latent)
         if device is not None or dtype is not None:
             weights = weights.to(device=device, dtype=dtype)
         return weights
+
+    def latent_for_shape(self, prefix_shape: Sequence[int], *, device=None, dtype=None) -> torch.Tensor:
+        """Return sampled latent coordinates for a shape-only sampler."""
+        prefix_shape = tuple(int(v) for v in prefix_shape)
+        sample_shape = getattr(self.generator_sampler, "sample_shape", None)
+        if not callable(sample_shape):
+            raise ValueError("this generator sampler requires coordinates; use latent_for_input()")
+        latent = sample_shape(self.latent_coordinates, prefix_shape).weights
+        return latent.to(device=device, dtype=dtype) if device is not None or dtype is not None else latent
+
+    latent_coordinates_for_shape = latent_for_shape
 
     def mean_bivector(self) -> torch.Tensor:
         """Return the mean path bivector coefficients over steps and control sites."""
@@ -368,26 +596,91 @@ class InvertibleBivectorField(CliffordModule):
         inverse: bool,
     ) -> tuple[torch.Tensor, GeneratorFieldSample]:
         prefix_shape = tuple(values.shape[:-1])
-        sampled = self.generator_sampler.sample(self.bivectors, field_input)
-        weights = sampled.weights
-        expected_shape = (self.path_steps, *prefix_shape, self.num_bivectors)
-        if tuple(weights.shape) != expected_shape:
-            raise ValueError(f"sampled bivector weights must have shape {expected_shape}, got {tuple(weights.shape)}")
-        if weights.device != values.device or weights.dtype != values.dtype:
-            weights = weights.to(device=values.device, dtype=values.dtype)
-            sampled = GeneratorFieldSample(
-                weights=weights,
-                domain_shape=sampled.domain_shape,
-                batch_shape=sampled.batch_shape,
-            )
-
-        flat, flat_weights = self._execution_view(values, weights, sampled)
+        sampled = self._sample_for_values(values, field_input)
+        flat, flat_weights = self._execution_view(values, sampled.weights, sampled)
         step_indices = range(self.path_steps - 1, -1, -1) if inverse else range(self.path_steps)
         for step in step_indices:
             step_weights = -flat_weights[step] if inverse else flat_weights[step]
             flat = self.action(flat, step_weights)
         output = flat.reshape(*prefix_shape, self.vector_layout.dim)
         return output, sampled
+
+    def _sample_generators(self, field_input: CoordinateFieldInput) -> GeneratorFieldSample:
+        latent_sample = self.generator_sampler.sample(self.latent_coordinates, field_input)
+        return GeneratorFieldSample(
+            weights=self._map_generators(latent_sample.weights),
+            domain_shape=latent_sample.domain_shape,
+            batch_shape=latent_sample.batch_shape,
+            latent_coordinates=latent_sample.weights,
+        )
+
+    def _sample_for_values(
+        self,
+        values: torch.Tensor,
+        field_input: CoordinateFieldInput,
+    ) -> GeneratorFieldSample:
+        sampled = self._sample_generators(field_input)
+        expected_shape = (self.path_steps, *values.shape[:-1], self.num_bivectors)
+        if tuple(sampled.weights.shape) != expected_shape:
+            raise ValueError(
+                f"sampled bivector weights must have shape {expected_shape}, got {tuple(sampled.weights.shape)}"
+            )
+        if sampled.weights.device == values.device and sampled.weights.dtype == values.dtype:
+            return sampled
+        latent_coordinates = sampled.latent_coordinates
+        if latent_coordinates is not None:
+            latent_coordinates = latent_coordinates.to(device=values.device, dtype=values.dtype)
+        return GeneratorFieldSample(
+            weights=sampled.weights.to(device=values.device, dtype=values.dtype),
+            domain_shape=sampled.domain_shape,
+            batch_shape=sampled.batch_shape,
+            latent_coordinates=latent_coordinates,
+        )
+
+    def _map_generators(self, latent_coordinates: torch.Tensor) -> torch.Tensor:
+        if self.generator_subspace is None:
+            return latent_coordinates
+        return self.generator_subspace(latent_coordinates)
+
+    def _resolve_generator_subspace(
+        self,
+        subspace: GeneratorSubspace | torch.Tensor | Sequence[int] | None,
+    ) -> GeneratorSubspace | None:
+        if subspace is None:
+            return None
+        if isinstance(subspace, GeneratorSubspace):
+            resolved = subspace
+        else:
+            value = subspace if isinstance(subspace, torch.Tensor) else torch.as_tensor(subspace)
+            if value.ndim == 1:
+                if value.dtype.is_floating_point:
+                    raise ValueError("one-dimensional generator_subspace values must be integer lane positions")
+                resolved = GeneratorSubspace.from_lanes(
+                    self.num_bivectors,
+                    value.tolist(),
+                    device=self.algebra.device,
+                    dtype=self.algebra.dtype,
+                )
+            elif value.ndim == 2:
+                # Accept both the standard [generator, latent] convention and
+                # basis-row [latent, generator] tensors at this field boundary.
+                if value.shape[0] == self.num_bivectors:
+                    mapping = value
+                elif value.shape[1] == self.num_bivectors:
+                    mapping = value.transpose(0, 1)
+                else:
+                    raise ValueError(
+                        "generator_subspace must have one axis equal to the compact bivector dimension "
+                        f"{self.num_bivectors}, got {tuple(value.shape)}"
+                    )
+                resolved = GeneratorSubspace(mapping)
+            else:
+                raise ValueError("generator_subspace must be lane positions or a rank-2 mapping")
+        if resolved.generator_dim != self.num_bivectors:
+            raise ValueError(
+                f"generator subspace output dimension must be {self.num_bivectors}, got {resolved.generator_dim}"
+            )
+        return resolved.to(device=self.algebra.device, dtype=self.algebra.dtype)
 
     def _execution_view(
         self,

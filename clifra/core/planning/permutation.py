@@ -82,6 +82,7 @@ def build_pseudoscalar_product_plan(
         signs=torch.tensor(signs, dtype=dtype, device=device),
     )
 
+
 __all__ = [
     "PseudoscalarProductPlan",
     "build_pseudoscalar_product_plan",

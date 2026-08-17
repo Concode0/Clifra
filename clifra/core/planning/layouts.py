@@ -128,6 +128,7 @@ class ProductRequest:
         """Return the grades selected for the product output."""
         return self.output_layout.grades
 
+
 def build_product_request(
     spec: AlgebraSpec,
     left: torch.Tensor,

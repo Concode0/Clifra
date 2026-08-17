@@ -6,7 +6,13 @@
 from .criteria import TargetFieldCriterion
 from .curriculum import ConstantCurriculum, CurriculumKnot, LossWeightSchedule, PhaseCurriculum
 from .engine import OptimizationStepContext, TransformationFieldEngine, TransformationFitResult
-from .field import CoordinateChart, InvertibleBivectorField
+from .field import (
+    ConformalChart,
+    CoordinateChart,
+    GeneratorSubspace,
+    GeneratorSubspaceMap,
+    InvertibleBivectorField,
+)
 from .inputs import CoordinateFieldInput, CoordinateLike
 from .logging import MetricLogger, MetricRecord
 from .policies import BivectorNormPolicy, InvertiblePathConsistencyPolicy
@@ -24,6 +30,7 @@ from .types import (
     PolicyResult,
     TargetCriterion,
     TransformationEvaluation,
+    TransformationRollout,
     TransformationState,
 )
 
@@ -31,6 +38,7 @@ __all__ = [
     "BivectorNormPolicy",
     "BroadcastGeneratorSampler",
     "ConstantCurriculum",
+    "ConformalChart",
     "CoordinateChart",
     "CoordinateFieldInput",
     "CoordinateLike",
@@ -40,6 +48,8 @@ __all__ = [
     "GeometricPolicy",
     "GeneratorFieldSample",
     "GeneratorFieldSampler",
+    "GeneratorSubspace",
+    "GeneratorSubspaceMap",
     "InvertibleBivectorField",
     "InvertiblePathConsistencyPolicy",
     "LossWeightSchedule",
@@ -55,5 +65,6 @@ __all__ = [
     "TransformationFieldEngine",
     "TransformationEvaluation",
     "TransformationFitResult",
+    "TransformationRollout",
     "TransformationState",
 ]

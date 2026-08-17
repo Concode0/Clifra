@@ -132,9 +132,7 @@ def asymmetry_penalty(logits_fwd: torch.Tensor, logits_rev: torch.Tensor, *, mar
     reverse = logits_rev.flatten()
     forward_centered = forward - forward.mean()
     reverse_centered = reverse - reverse.mean()
-    corr = (forward_centered * reverse_centered).sum() / (
-        forward_centered.norm() * reverse_centered.norm() + 1e-8
-    )
+    corr = (forward_centered * reverse_centered).sum() / (forward_centered.norm() * reverse_centered.norm() + 1e-8)
     return F.relu(corr - margin)
 
 

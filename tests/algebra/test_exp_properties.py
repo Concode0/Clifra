@@ -51,9 +51,7 @@ def _well_conditioned_spectral_bivectors(draw):
         x, y = 2 * plane, 2 * plane + 1
         generator[y, x] = angle
         generator[x, y] = -angle
-    rotation, _ = torch.linalg.qr(
-        torch.randn(6, 6, dtype=torch.float64, generator=torch.Generator().manual_seed(421))
-    )
+    rotation, _ = torch.linalg.qr(torch.randn(6, 6, dtype=torch.float64, generator=torch.Generator().manual_seed(421)))
     generator = rotation @ generator @ rotation.T
     pairs = sorted(((1 << i) | (1 << j), i, j) for i in range(6) for j in range(i + 1, 6))
     return torch.tensor(

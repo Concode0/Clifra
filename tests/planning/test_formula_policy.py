@@ -116,6 +116,8 @@ def test_extension_facts_are_open_immutable_and_qualified():
 
     with pytest.raises(ValueError, match="dot-qualified"):
         Polynomial.feature("missing")
+
+
 def test_module_apply_clears_policy_dependent_plans_before_dtype_replanning():
     policy = FormulaPolicy(
         rules=(

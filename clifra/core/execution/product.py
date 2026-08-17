@@ -164,6 +164,7 @@ class GradeProductExecutor(nn.Module):
         output = compact.new_zeros(*compact.shape[:-1], self.dim)
         return output.index_copy(-1, self.output_basis_indices, compact)
 
+
 class FullTableProductExecutor(nn.Module):
     """Planner-owned full-layout Cayley-table product executor.
 
@@ -230,5 +231,6 @@ class FullTableProductExecutor(nn.Module):
     def forward_full(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         """Return full-layout product lanes."""
         return self.forward_compact(left, right)
+
 
 __all__ = ["FullTableProductExecutor", "GradeProductExecutor"]

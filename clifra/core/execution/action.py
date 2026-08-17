@@ -359,6 +359,7 @@ class FullSandwichActionExecutor(nn.Module):
         self.contract.validate(left, name="left")
         self.contract.validate(right, name="right")
 
+
 class _VersorActionExecutor(nn.Module):
     """Shared execution setup for single and mixed versor actions."""
 

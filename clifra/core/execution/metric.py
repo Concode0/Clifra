@@ -31,4 +31,5 @@ class SignatureNormSquaredExecutor(nn.Module):
         self.input_contract.validate(values, name="values")
         return (values * values * self.signs).sum(dim=-1, keepdim=True)
 
+
 __all__ = ["SignatureNormSquaredExecutor"]

@@ -204,7 +204,9 @@ def infer_contract(
     return contract
 
 
-def compact_values(algebra, value: torch.Tensor, *, layout: Optional[GradeLayout] = None, grades=None) -> tuple[torch.Tensor, GradeLayout]:
+def compact_values(
+    algebra, value: torch.Tensor, *, layout: Optional[GradeLayout] = None, grades=None
+) -> tuple[torch.Tensor, GradeLayout]:
     """Return compact values and resolved semantic layout."""
     if not isinstance(value, torch.Tensor):
         raise TypeError(f"Expected Tensor value, got {type(value)!r}")
@@ -218,7 +220,9 @@ def compact_values(algebra, value: torch.Tensor, *, layout: Optional[GradeLayout
     return contract.to_compact(value), contract.layout
 
 
-def canonical_values(algebra, value: torch.Tensor, *, layout: Optional[GradeLayout] = None, grades=None) -> torch.Tensor:
+def canonical_values(
+    algebra, value: torch.Tensor, *, layout: Optional[GradeLayout] = None, grades=None
+) -> torch.Tensor:
     """Return canonical full-basis values."""
     values, resolved = compact_values(algebra, value, layout=layout, grades=grades)
     if resolved.dim == resolved.spec.dim and resolved.grades == tuple(range(resolved.spec.n + 1)):

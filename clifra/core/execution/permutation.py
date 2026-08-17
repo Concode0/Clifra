@@ -37,4 +37,5 @@ class PseudoscalarProductExecutor(nn.Module):
         gathered = torch.index_select(values, -1, self.input_positions)
         return gathered * self.signs
 
+
 __all__ = ["PseudoscalarProductExecutor"]

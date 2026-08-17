@@ -588,9 +588,7 @@ def _spectral_local_buffers(
     for output_position, output_index in enumerate(output_layout.basis_indices):
         grade = int(output_index).bit_count()
         if grade % 2 == 0 and grade <= axis_count:
-            output_positions_by_grade.setdefault(grade, []).append(
-                (output_position, tuple(_basis_bits(output_index)))
-            )
+            output_positions_by_grade.setdefault(grade, []).append((output_position, tuple(_basis_bits(output_index))))
 
     grades = [grade for grade in range(0, axis_count + 1, 2) if grade in output_positions_by_grade]
     if not grades:

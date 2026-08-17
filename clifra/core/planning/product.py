@@ -100,6 +100,8 @@ def select_product_route(
             candidate("sparse", sparse_pairs, sparse_bytes),
         ),
     )
+
+
 def _device_backend(device) -> str:
     if device is None:
         return "cpu"
