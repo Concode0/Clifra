@@ -4,7 +4,7 @@ The suite measures eager forward, backward, startup, and cumulative behavior. `b
 
 ## Latest Published Run
 
-Run `20260804T071703.997645Z-e8ca8b8652` on `macOS-26.5.2-arm64-arm-64bit` with PyTorch `2.10.0` and `5` Torch threads.
+Run `20260818T070256.028981Z-e8ca8b8652` on `macOS-26.5.2-arm64-arm-64bit` with PyTorch `2.10.0` and `5` Torch threads.
 
 - successful rows: `15882`
 - skipped cases: `0`
@@ -22,7 +22,7 @@ Run `20260804T071703.997645Z-e8ca8b8652` on `macOS-26.5.2-arm64-arm-64bit` with 
 
 - Output finiteness: `15882/15882` rows contain only finite values.
 - Gradient finiteness: `15882/15882` measured gradients contain only finite values.
-- Timing stability: `44` rows have a forward IQR greater than 50% of their median. These are retained rather than silently filtered.
+- Timing stability: `39` rows have a forward IQR greater than 50% of their median. These are retained rather than silently filtered.
 - Repeated action, euclidean: median float32 maximum relative error after `512` steps is `3.506e-05`.
 - Repeated action, mixed: median float32 maximum relative error after `512` steps is `1.785e-05`.
 - Repeated action, degenerate: median float32 maximum relative error after `512` steps is `9.752e-06`.
