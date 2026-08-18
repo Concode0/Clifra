@@ -10,8 +10,8 @@ expected result, so it can also be read independently.
    lanes with explicit compact contracts.
 3. [Learn a Geometric Transformation](learn-geometric-transform.md) — train a
    bivector-parameterized action with PyTorch.
-4. [Train a Surface Projection](unbend-manifold.md) — combine a rotor action,
-   learned lane gates, robustness checks, and surface plots.
+4. [Train a Geometric Surface Model](unbend-manifold.md) — combine a rotor action,
+   learned lane gates, a noise-sensitivity check, and surface plots.
 
 The [Explanations](../explanations/index.md) cover the underlying design. The
 [API Reference](../reference/index.md) renders the public source docstrings.

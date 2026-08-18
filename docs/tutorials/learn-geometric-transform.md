@@ -57,8 +57,9 @@ for step in range(120):
 
 with torch.no_grad():
     prediction = model(x)
+    final_loss = (prediction - target).square().mean()
 
-print("loss", float(loss.detach()))
+print("loss", float(final_loss))
 print("prediction", prediction.squeeze())
 ```
 
@@ -66,7 +67,7 @@ With the fixed seed, the loss falls below `1e-4` and the compact vector
 coordinates approach the target:
 
 ```python
-assert float(loss.detach()) < 1.0e-4
+assert float(final_loss) < 1.0e-4
 prediction_vector = vector_layout.compact(prediction)
 target_vector = vector_layout.compact(target)
 assert torch.allclose(prediction_vector, target_vector, atol=1.0e-2)
@@ -76,6 +77,6 @@ This is the smallest example of clifra's learnable-geometric-object approach:
 the model does not learn four unrelated output coefficients. It learns a plane
 parameter whose algebraic action transforms the input.
 
-The [surface projection tutorial](unbend-manifold.md) places the same
+The [geometric surface tutorial](unbend-manifold.md) places the same
 parameterization in a larger experiment with a learned lane gate,
-regularization, robustness measurements, and surface plots.
+regularization, noise-sensitivity measurements, and surface plots.

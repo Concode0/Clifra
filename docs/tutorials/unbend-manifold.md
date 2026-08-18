@@ -1,8 +1,8 @@
-# Train a Surface Projection
+# Train a Geometric Surface Model
 
 The following $Cl(3, 0)$ experiment trains a rotor action followed by a learned
 lane gate to project a sampled surface toward the $e_1$–$e_2$ plane. The data
-formula, model, loss, optimizer, robustness measurement, and surface plotting
+formula, model, loss, optimizer, noise-sensitivity measurement, and surface plotting
 helper are included. Familiarity with PyTorch training loops is assumed; every
 clifra-specific object is introduced locally.
 
@@ -14,10 +14,9 @@ z0 = 0.5 * x * y
 ```
 
 The grade-2 `VersorLayer` learns a bivector, exponentiates it to a rotor, and
-applies the planned isometric action. It can recover the global orientation but
-cannot remove the remaining curvature. `BladeSelector` then learns per-lane
-gates, making the complete model a projection rather than an invertible change
-of coordinates.
+applies the planned isometric action. It can reduce the height contribution from
+the global tilt but cannot remove the remaining curvature. `BladeSelector` then
+learns positive per-lane gates that attenuate the residual height coordinate.
 
 ![Sampled surface before projection](../assets/first-guide/manifold_original.png)
 
@@ -30,8 +29,7 @@ import math
 
 import torch
 
-from clifra import make_algebra
-from clifra.core.foundation import CliffordModule
+from clifra import CliffordModule, make_algebra
 from clifra.layers import BladeSelector, VersorLayer
 from clifra.optimizers import make_riemannian_optimizer
 ```
@@ -41,7 +39,7 @@ from clifra.optimizers import make_riemannian_optimizer
 $Cl(3, 0)$ has eight canonical lanes. `embed_vector` places Cartesian coordinates
 in the grade-1 subspace; `GradeLayout.compact` retrieves them without encoding
 canonical lane positions in the example. The fixed tilt gives the rotor a
-global orientation to recover before the selector removes residual height.
+global height contribution to reduce before the selector attenuates the residual.
 
 ```python
 def sample_patch(algebra, n: int = 24) -> tuple[torch.Tensor, tuple[int, int]]:
@@ -73,7 +71,7 @@ def coordinate_component(algebra, values: torch.Tensor, axis: int) -> torch.Tens
     return vector_coordinates(algebra, values).select(-1, int(axis))
 ```
 
-## Build the Projection
+## Build the Model
 
 A grade-2 rotor action is followed by a blade selector. The selector starts as
 pass-through and learns which lanes to attenuate.
@@ -191,9 +189,9 @@ aligned {'z': 0.032819}
 projected {'z': 0.001267, 'selector_deviation': 0.277118}
 ```
 
-The rotor removes the fixed tilt, reducing the height energy to that of the
-original saddle. The selector then attenuates the residual height that a single
-global rotation cannot remove.
+The rotor reduces the contribution from the fixed tilt, bringing the height
+energy close to that of the original saddle. The selector then attenuates the
+residual height that a single global rotation cannot remove.
 
 Inspect the learned gate in vector coordinates rather than indexing canonical
 lanes:
@@ -206,8 +204,9 @@ with torch.no_grad():
 print("vector gates", vector_gates.squeeze())
 ```
 
-The $e_3$ gate is smaller than the $e_1$ and $e_2$ gates. This is the
-non-invertible step that removes most of the height variation.
+The $e_3$ gate is smaller than the $e_1$ and $e_2$ gates, so it attenuates most
+of the height variation. For finite logits, the sigmoid-based gates remain
+positive; this learned selector is therefore not an exact projection.
 
 ## Noise Check
 
@@ -229,7 +228,7 @@ noise_rows = noise_test(model, data)
 
 ![Training metrics](../assets/first-guide/training_metrics.png)
 
-![Noise robustness](../assets/first-guide/noise_robustness.png)
+![Noise sensitivity](../assets/first-guide/noise_robustness.png)
 
 ## Plot
 
@@ -316,11 +315,7 @@ plot_patch(
 | --- | --- |
 | `make_algebra(3, 0)` | 3-D Euclidean Clifford algebra |
 | `algebra.embed_vector(xyz)` | Formula samples into full-lane multivectors |
-| `VersorLayer(..., grade=2)` | learned bivector that recovers the global orientation |
+| `VersorLayer(..., grade=2)` | learned bivector that reduces the contribution from the fixed global tilt |
 | `BladeSelector` | learned lane gate that suppresses residual curved height |
 | `coordinate_component(..., axis=2)` | z-energy pressure without a basis-lane literal |
 | `model.selector_penalty()` | selector-logit regularization toward pass-through |
-
-The selector can discard information, so the projected result is not an
-invertible flattening or evidence of a change in the surface's intrinsic
-geometry.

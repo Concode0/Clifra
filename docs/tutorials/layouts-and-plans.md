@@ -3,7 +3,7 @@
 Compact grade layouts retain only the basis blades required by an operation.
 The following $Cl(3, 0)$ example includes the algebra construction, layout
 declarations, product plan, execution, and storage conversion. It does not
-depend on the canonical-storage tutorial.
+depend on state from the previous tutorial.
 
 ## Declare the Layouts
 
