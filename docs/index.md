@@ -1,6 +1,6 @@
 # clifra
 
-Clifra provides layout-first Clifford algebra tools for PyTorch. It represents
+clifra provides layout-first Clifford algebra tools for PyTorch. It represents
 geometric values as tensors, plans algebra operations from explicit grade
 layouts, and exposes the resulting work as reusable PyTorch modules. It can be
 used as a Clifford algebra library, a geometric deep-learning toolkit, or the
@@ -24,14 +24,3 @@ statistics, cumulative error, and the complete execution context.
 
 See [Benchmarks](benchmarks/index.md) for the matrix, commands, graphs, and raw
 artifacts.
-
-## Research Demonstration
-
-The continuum solver brings Clifra's full methodology together: semantic grade
-layouts, planned Clifford actions, differentiable execution, sampled bivector
-generators, and objective-driven learning. Its compact example demonstrates the
-general transformation field, while the physics-informed example develops that
-field into a validated deformation system.
-
-See [Bivector Coordinate Fields](explanations/transformation-fields.md) for the
-derivation and the exact sampling, path, and inversion semantics.

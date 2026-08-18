@@ -1,127 +1,196 @@
 # Why bivector coordinate fields work
 
-The continuum solver is Clifra's end-to-end research demonstration of
-layout-directed geometric learning. It implements a differentiable field of
-local Clifford actions parameterized by sampled bivector generators. Clifra
-supplies the structured coordinate spaces and compiled transformation law;
-user-defined differentiable objectives determine what the field learns.
+An `InvertibleBivectorField` extends a Clifford-generated action from one
+bivector to a field of local actions over a sample domain. At each composition
+stage, a generator sampler evaluates a bivector for each persistent sample
+identity, and `path_steps` specifies how many such stages are composed in order.
 
-The continuum construction extends a Clifford action into a generator field
-over a domain. Sampling determines how its local generators vary, paths
-determine how their actions compose, and differentiable objectives determine
-the transformation the field learns. The included physics-informed deformation
-system is one complete realization of this construction.
+The construction works because a bivector induces a linear generator on the
+grade-1 subspace. Exponentiating that generator gives an invertible local
+action, while sampling and ordered composition turn those local actions into a
+differentiable field.
 
-## From a bivector to an action
+## From a bivector to a local action
 
-Let $B$ be a bivector in $Cl(p,q,r)$, let $n=p+q+r$, and hold $B$ fixed over
-one action step. Define
+Let $B$ be a bivector in $Cl(p,q,r)$ and hold it fixed for one composition
+stage. Define the rotor
 
 \[
 R(t)=\exp(-tB/2).
 \]
 
-Because bivector reversal gives $\widetilde{B}=-B$, the rotor action on a
-grade-1 value is
+Because bivector reversal gives $\widetilde{B}=-B$,
+
+\[
+\widetilde{R(t)}=\exp(tB/2).
+\]
+
+The sandwich action on a grade-1 value is therefore
 
 \[
 x(t)=R(t)x(0)\widetilde{R(t)}
     =\exp(-tB/2)x(0)\exp(tB/2).
 \]
 
-Differentiating gives
+Differentiating the two exponential factors gives
 
 \[
 \frac{d x(t)}{dt}
-=-\frac12\left(Bx(t)-x(t)B\right)
-=G(B)x(t).
+=-\frac12\left(Bx(t)-x(t)B\right).
 \]
 
-Here, $G(B)$ is the $n\times n$ linear generator induced by the commutator on
-the grade-1 subspace. Therefore
+The commutator with a bivector maps grade 1 back to grade 1. Consequently it
+induces an ordinary linear operator $G(B)$ on the grade-1 coordinate lanes:
+
+\[
+G(B)x=-\frac12(Bx-xB),
+\qquad
+\frac{d x(t)}{dt}=G(B)x(t).
+\]
+
+Since $G(B)$ is constant during the stage, the solution at $t=1$ is
 
 \[
 x(1)=\exp(G(B))x(0).
 \]
 
-This is why bivector coefficients can be learned directly: the default planned
-action maps their linear coordinate space into invertible linear actions on
-grade 1. For an ordered path $B_1,\ldots,B_S$,
+This connects learned bivector coefficients to invertible linear actions.
+`InvertibleBivectorField` obtains the default grade-1 action from
+`algebra.plan_versor_action(grade=2, ...)`; the planned executor constructs the
+induced generator matrix and applies its matrix exponential. The equivalent
+even-grade rotors can be inspected with `rotors_for_input()` or, for
+shape-only samplers, `rotor_path()`.
+
+## From a local action to an indexed field
+
+Let $E$ embed coordinates into the selected grade-1 chart and let $D$ extract
+ordinary coordinates afterward. For persistent identity $\xi_i$, a generator
+sampler evaluates one bivector per composition stage:
 
 \[
-x_S=\exp(G(B_S))\cdots\exp(G(B_1))x_0.
+B_s^\Theta(\xi_i), \qquad s=0,\ldots,S-1.
 \]
 
-The inverse uses $-B_S,\ldots,-B_1$ in that order.
-
-## From one action to a field
-
-`CoordinateChart` embeds input coordinates into grade 1 and extracts the
-result. Let $\Theta$ denote the stored generator parameters. A sampler evaluates
-the step generator $B_s^\Theta(\xi_i)$ at persistent sample label $\xi_i$:
+If the stored parameters use a lower-dimensional generator representation,
+`GeneratorSubspace` supplies a fixed linear map
 
 \[
-\phi_\Theta(X_i,\xi_i)
+B_s^\Theta(\xi_i)=M z_s^\Theta(\xi_i)
+\]
+
+from sampled latent coordinates $z$ to compact bivector coefficients. The
+resulting ordered field map is
+
+\[
+\phi_\Theta(x_i,\xi_i)
 =D\!\left[
-\exp\!\left(G(B_S^\Theta(\xi_i))\right)\cdots
-\exp\!\left(G(B_1^\Theta(\xi_i))\right)E(X_i)
+\exp\!\left(G(B_{S-1}^\Theta(\xi_i))\right)
+\cdots
+\exp\!\left(G(B_0^\Theta(\xi_i))\right)
+E(x_i)
 \right].
 \]
 
-`CoordinateFieldInput` keeps transformed values separate from persistent
-material labels. Regular-grid sampling associates generators by tensor index;
-RBF sampling associates them by arbitrary coordinates. Interpolation changes
-the generator field, never the input coordinate values.
+`CoordinateFieldInput` makes the two arguments explicit:
 
-Training is ordinary differentiation through the action:
+- `coordinates` contains the values $x_i$ transformed by the field;
+- `sample_coordinates` contains the persistent identities $\xi_i$ used by the
+  generator sampler.
+
+The tensors share a prefix shape but may have different final dimensions. A
+three-dimensional value can, for example, carry a one-dimensional identity.
+`domain_shape` records the structured suffix of that prefix; it is topology
+metadata, not another coordinate value.
+
+If `sample_coordinates` is omitted, sampling falls back to `coordinates`.
+Otherwise the identities remain fixed as transformed values change.
+`with_coordinates()` replaces values while retaining identity and topology,
+and `retain_sample_identity()` makes fallback identities explicit.
+
+The sampler controls how $z_s^\Theta(\xi)$ or $B_s^\Theta(\xi)$ varies over the
+domain. `BroadcastGeneratorSampler` shares one generator per stage,
+`RegularGridGeneratorSampler` interpolates a structured control lattice, and
+`RBFGeneratorSampler` evaluates controls at arbitrary
+`sample_coordinates`. Sampling changes generator coefficients; it does not
+interpolate or replace the coordinate values being transformed.
+
+## Why composition order matters
+
+`path_steps` counts ordered composition stages. It does not denote physical
+time and is separate from batch and sampling-domain axes. In general,
+
+\[
+\exp(G(B_2))\exp(G(B_1))
+\ne
+\exp(G(B_1))\exp(G(B_2))
+\]
+
+when the induced generators do not commute. Reordering stages or replacing
+them with a single exponential of the summed bivectors therefore changes the
+field parameterization.
+
+The implementation preserves this order from stage $0$ through $S-1$.
+`rollout()` exposes intermediate forward and reverse composition states as a
+`TransformationRollout`; its `forward_coordinates` and `inverse_coordinates`
+are diagnostics of the declared composition, not a different field map.
+
+## Differentiating the field
+
+Every operation in the construction is differentiable: generator sampling,
+the optional subspace map, the induced matrix exponential, ordered action
+composition, and chart extraction. A generic objective can therefore be
+written as
 
 \[
 \min_\Theta\;
-\mathcal{L}\!\left(\operatorname{State}_\Theta(X,\xi),Y\right)
+\mathcal{L}\!\left(\mathsf{State}_\Theta(X,\xi),Y\right)
 +\sum_k\lambda_k
-\mathcal{P}_k\!\left(\operatorname{State}_\Theta(X,\xi),\Theta\right).
+\mathcal{P}_k\!\left(\mathsf{State}_\Theta(X,\xi),\Theta\right).
 \]
 
-Here, $\operatorname{State}_\Theta$ contains the input identity, transformed
-values, and sampled generator weights exposed by `ContinuumState`. A criterion
-or policy may use only the parts it needs. The mechanics example supplies one
-choice of $\mathcal{L}$ and $\mathcal{P}_k$. Dimension, signature, sampling
-domain, and objective are configurable parts of the construction.
+`InvertibleBivectorField.state()` returns a `TransformationState`. It exposes
+`input_coordinates`, `transformed_coordinates`, sampled `generator_weights`,
+optional sampled `latent_coordinates`, topology metadata, and the
+identity-preserving `field_input`. The loss terms determine what is fitted;
+they are not part of the transformation-field representation itself.
 
-## Minimizing exponential work
+For inspection, `latent_for_input()` evaluates sampled latent coordinates and
+`weights_for_input()` evaluates the resulting bivector coefficients after the
+`GeneratorSubspace` map.
 
-The field's normal grade-1 action does not construct a full even multivector
-with `bivector_exp`. Clifra builds $G(B)$ directly and evaluates the smaller
-`torch.matrix_exp` on the $n\times n$ vector representation. The explicit
-`rotor_path()` and `rotors_for_input()` helpers use `bivector_exp` when a caller
-asks to inspect rotors.
+## Indexed invertibility and global injectivity
 
-The field also avoids exponentiating weights repeated only by broadcasting:
-
-- a global generator is exponentiated once per path step;
-- a regular-grid generator is exponentiated once per spatial site and shared
-  across batch axes;
-- a coordinate-dependent generator is exponentiated once per sampled generator
-  row; numerically equal rows are not deduplicated.
-
-Path steps are evaluated separately because, in general,
+For a fixed identity $\xi$, each local exponential is invertible:
 
 \[
-\exp(G_2)\exp(G_1)\ne\exp(G_1+G_2)
+\exp(G(B_s(\xi)))^{-1}=\exp(-G(B_s(\xi))).
 \]
 
-when $[G_2,G_1]\ne0$. Merging such steps would change the parameterization.
-The implementation therefore preserves path composition and removes only
-broadcast-redundant exponential evaluations.
+The inverse of the composition applies the same sampled generators in reverse
+stage order with opposite signs. Operationally, it starts with
+$-B_{S-1}(\xi)$ and ends with $-B_0(\xi)$.
 
-## Local inversion and global geometry
+The same persistent identity must be supplied in both directions.
+`TransformationState.inverse_input()` pairs the transformed values with the
+original `sample_coordinates`:
 
-For the default planned action, a path has an inverse when it is evaluated with
-the same persistent sample labels: negate its generators and reverse their
-order. Projective extraction additionally requires a nonzero homogeneous
-coordinate. An injected action module must satisfy the same inverse identity if
-it is to retain this property.
+```python
+state = field.state(field_input)
+reconstructed = field.inverse(state.inverse_input())
+```
 
-Global injectivity remains a property of the assembled field, not of each local
-matrix exponential. Application constraints may encourage it; the validation
-required by the application must establish the property actually claimed.
+The equivalent explicit form is
+`field.inverse(field_input.with_coordinates(state.transformed_coordinates))`.
+Passing only the transformed values to a coordinate-driven sampler can sample
+different generators and does not satisfy this indexed inverse contract.
+`inverse_state()` returns the corresponding `TransformationState` for the
+reverse evaluation.
+
+This establishes local, identity-indexed invertibility. It does not by itself
+establish global injectivity of the assembled field. Different identities may
+select different invertible local actions whose outputs coincide, and a field
+over a structured domain may fold or self-intersect even though every local
+matrix exponential is invertible. Global injectivity requires a separate
+property or validation of the assembled map. A custom injected action also
+retains the inverse contract only when negating its generator implements the
+local inverse.

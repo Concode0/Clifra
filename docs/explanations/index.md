@@ -8,11 +8,10 @@ geometric parameterization, numerical execution, and PyTorch integration.
 2. [Planning Policy as Dependency Injection](planning-policy-injection.md)
    explains resource limits and executor selection.
 3. [Geometric Parameterization](clifra-methodology.md) describes geometric
-   objects as learnable coordinate systems and positions the physics-informed
-   bivector-field showcase within that method.
+   objects as learnable coordinate systems.
 4. [Why Bivector Coordinate Fields Work](transformation-fields.md) derives the
-   generalized input, sampling, action, and inversion contracts behind the
-   continuum-solver research package.
+   local grade-1 generator, ordered sampled field map, differentiable
+   objective, and indexed inversion semantics.
 5. [Bivector Exponential Methods](bivector-exponential.md) separates
    exact low-dimensional formulas, matrix exponentiation, and spectral-local
    approximation.
