@@ -46,7 +46,9 @@ class TransformationState:
 class TransformationRollout:
     """Intermediate states of one forward path and its exact reverse path.
 
-    The leading axis is path time and has ``path_steps + 1`` entries. The
+    By default the leading axis has ``path_steps + 1`` entries. With action
+    subdivision it has ``path_steps * substeps_per_step + 1`` entries, sampled
+    at canonical generator fractions from each step's starting state. The
     forward trajectory starts at the input. The inverse trajectory starts at
     the forward endpoint and applies the same sampled generators in reverse
     order with opposite signs.
@@ -59,6 +61,9 @@ class TransformationRollout:
     generator_weights: torch.Tensor
     latent_coordinates: torch.Tensor | None
     field_input: CoordinateFieldInput | None = None
+    includes_initial: bool = True
+    path_steps: int | None = None
+    substeps_per_step: int = 1
 
     @property
     def forward(self) -> torch.Tensor:
@@ -88,12 +93,21 @@ class TransformationRollout:
     @property
     def coordinates(self) -> torch.Tensor:
         """Return the complete forward-then-inverse round-trip trajectory."""
-        return torch.cat((self.forward_coordinates, self.inverse_coordinates[1:]), dim=0)
+        inverse_start = 1 if self.includes_initial else 0
+        return torch.cat((self.forward_coordinates, self.inverse_coordinates[inverse_start:]), dim=0)
 
     @property
     def steps(self) -> int:
-        """Return the number of generator steps in each direction."""
-        return int(self.forward_coordinates.shape[0] - 1)
+        """Return the number of stored generator steps in each direction."""
+        if self.path_steps is not None:
+            return int(self.path_steps)
+        initial_offset = 1 if self.includes_initial else 0
+        return int(self.forward_coordinates.shape[0] - initial_offset) // int(self.substeps_per_step)
+
+    @property
+    def action_steps(self) -> int:
+        """Return the number of sampled fractional action intervals per direction."""
+        return self.steps * int(self.substeps_per_step)
 
 
 @dataclass(frozen=True)
@@ -184,7 +198,13 @@ class CoordinateTransformationField(Protocol):
         """Evaluate the field's declared inverse contract."""
         ...
 
-    def rollout(self, coordinates: CoordinateLike) -> TransformationRollout:
+    def rollout(
+        self,
+        coordinates: CoordinateLike,
+        *,
+        include_initial: bool = True,
+        substeps_per_step: int = 1,
+    ) -> TransformationRollout:
         """Expose one field application's forward path and reverse retracing."""
         ...
 

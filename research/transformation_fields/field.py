@@ -445,14 +445,22 @@ class InvertibleBivectorField(CliffordModule):
         *,
         sample_coordinates: torch.Tensor | None = None,
         domain_shape: Sequence[int] | None = None,
+        include_initial: bool = True,
+        substeps_per_step: int = 1,
     ) -> TransformationRollout:
-        """Expose every internal path state and its inverse retracing.
+        """Expose every internal path state and its exact inverse retracing.
 
-        The forward trajectory applies each of the ``path_steps`` sampled
-        generators once. The inverse trajectory starts from the exact final
-        forward multivector, then negates the same generators and applies them
-        in reverse order. Sampling occurs once at the input identity.
+        ``substeps_per_step`` samples each stored generator ``B`` at
+        ``alpha = 0, 1/m, ..., 1``. Every intermediate frame is evaluated from
+        that step's starting state by the genuine ``exp(-alpha B / 2)`` action,
+        rather than by coordinate interpolation or accumulated fractional
+        actions. Sampling occurs once at the persistent input identity.
+
+        When ``include_initial`` is false, the starting state is omitted from
+        each directional trajectory. The default preserves the original
+        ``path_steps + 1`` rollout contract.
         """
+        substeps_per_step = _positive_int(substeps_per_step, "substeps_per_step")
         field_input = as_coordinate_field_input(
             coordinates,
             sample_coordinates=sample_coordinates,
@@ -467,16 +475,25 @@ class InvertibleBivectorField(CliffordModule):
 
         forward_multivectors = [initial_mv]
         for step in range(self.path_steps):
-            flat = self.action(flat, flat_weights[step])
-            forward_multivectors.append(flat.reshape(*prefix_shape, self.vector_layout.dim))
+            step_start = flat
+            for substep in range(1, substeps_per_step + 1):
+                alpha = float(substep) / float(substeps_per_step)
+                flat = self.action(step_start, alpha * flat_weights[step])
+                forward_multivectors.append(flat.reshape(*prefix_shape, self.vector_layout.dim))
 
         inverse_multivectors = [forward_multivectors[-1]]
         for step in range(self.path_steps - 1, -1, -1):
-            flat = self.action(flat, -flat_weights[step])
-            inverse_multivectors.append(flat.reshape(*prefix_shape, self.vector_layout.dim))
+            step_start = flat
+            for substep in range(1, substeps_per_step + 1):
+                alpha = float(substep) / float(substeps_per_step)
+                flat = self.action(step_start, -alpha * flat_weights[step])
+                inverse_multivectors.append(flat.reshape(*prefix_shape, self.vector_layout.dim))
 
         forward_mv = torch.stack(forward_multivectors, dim=0)
         inverse_mv = torch.stack(inverse_multivectors, dim=0)
+        if not include_initial:
+            forward_mv = forward_mv[1:]
+            inverse_mv = inverse_mv[1:]
         return TransformationRollout(
             forward_coordinates=self.chart.extract(forward_mv),
             inverse_coordinates=self.chart.extract(inverse_mv),
@@ -485,6 +502,9 @@ class InvertibleBivectorField(CliffordModule):
             generator_weights=sampled.weights,
             latent_coordinates=sampled.latent_coordinates,
             field_input=persistent_input,
+            includes_initial=bool(include_initial),
+            path_steps=self.path_steps,
+            substeps_per_step=substeps_per_step,
         )
 
     def weights_for_input(
