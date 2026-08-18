@@ -62,7 +62,7 @@ Float32 trajectories are compared with float64 trajectories.
 ## Reproduce
 
 ```bash
-uv run --group benchmark benchmarks/run.py
+uv run --group viz benchmarks/run.py
 ```
 
 See the [published configuration](artifacts/config.json) for the complete matrix.

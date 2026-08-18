@@ -44,9 +44,6 @@ dev = [
     "pytest-xdist>=3.8.0",
     "ruff>=0.8.0",
 ]
-benchmark = [
-    "matplotlib>=3.9.0",
-]
 docs = [
     "mkdocs<2.0",
     "mkdocs-material>=9.7.4",
@@ -58,9 +55,6 @@ viz = [
     "matplotlib>=3.9.0",
     "numpy>=2.0.0",
     "vtk>=9.4.0",
-]
-fem = [
-    "torch-fem>=0.7.1",
 ]
 
 [build-system]
