@@ -5,9 +5,9 @@ Most operations touch only a subset. A vector has $n$ coefficients, a
 bivector has $n(n - 1)/2$, and a rotor generated from a bivector occupies only
 even grades.
 
-Clifra makes this distinction explicit. A layout identifies the blades a tensor
-means; storage determines how those coefficients occupy the final tensor axis;
-a tensor contract binds the two declarations together.
+clifra makes this distinction explicit. A layout identifies which blades a
+tensor represents; storage determines how those coefficients occupy the final
+tensor axis; a tensor contract binds the two declarations together.
 
 ## Layout is semantic structure
 

@@ -1,16 +1,14 @@
 # Optimization for Geometric Parameters
 
-Clifra separates optimization dynamics from geometric realization. A layout
+clifra separates optimization dynamics from geometric realization. A layout
 defines the parameter coordinates, a layer turns those coordinates into a
 geometric action, and an optimizer determines how the objective is explored.
-This separation makes the built-in optimizers useful defaults without making
-them the boundary of the optimization methods available to a Clifra model.
 
 ## Built-in parameter dispatch
 
 `RiemannianAdam` and `ExponentialSGD` use ordinary PyTorch parameter groups with
 one additional `manifold` field. Their `from_model()` constructors collect the
-tags already attached by Clifra layers and apply the corresponding post-update
+tags already attached by clifra layers and apply the corresponding post-update
 rule.
 
 | Tag | Typical parameter | Post-update rule |
@@ -71,7 +69,7 @@ problems.
 
 ## Connect another optimizer
 
-Clifra's tags are ordinary parameter-group metadata, so an optimizer adapter
+clifra's tags are ordinary parameter-group metadata, so an optimizer adapter
 can follow the same structure as the built-ins:
 
 1. Use `group_parameters_by_manifold(model)` to collect coordinate groups.
@@ -99,7 +97,7 @@ P_R(V) = R\left\langle \widetilde{R}V \right\rangle_2,
 
 These functions use canonical full-lane rotors at their boundary and compact
 grade-2 lanes internally. They are building blocks for an optimizer adapter;
-Clifra's bivector-parameterized layers do not need to store or renormalize a
+clifra's bivector-parameterized layers do not need to store or renormalize a
 rotor parameter themselves.
 
 Optimizer tags should remain about parameter-level update rules. Invariance,

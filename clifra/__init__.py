@@ -3,7 +3,7 @@
 
 """Layout-first Clifford algebra tools for PyTorch.
 
-Clifra exposes one planner-owned algebra host through ``make_algebra``. Tensors
+clifra exposes one planner-owned algebra host through ``make_algebra``. Tensors
 can use full lanes or declared compact ``GradeLayout`` lanes; planning resolves
 the static graph, execution modules own the compiled tensor work, and layers
 consume those layout contracts without depending on a second algebra host.

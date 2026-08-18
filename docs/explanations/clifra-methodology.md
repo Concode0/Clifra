@@ -1,9 +1,6 @@
 # Geometric Parameterization
 
-Clifra provides Clifford algebra tools for PyTorch that can be used for
-individual operations as well as differentiable geometric models. One pattern
-used throughout the library is to represent a geometric object's generating
-coordinates directly and construct its action with the algebra.
+clifra supports both individual Clifford operations and differentiable geometric models in PyTorch. A recurring pattern in clifra is to represent a geometric object's generating coordinates directly and construct its action with the algebra.
 
 Under this pattern, a model may learn a bivector that generates a rotor, a
 vector that determines a reflection, or coefficients in a declared mixture of
@@ -40,7 +37,7 @@ sandwich product construct the action at each forward pass. The model therefore
 learns the plane generator of the transformation in a fixed grade-2 coordinate
 space.
 
-In Clifra, the signature, selected grades, and action are explicit modeling
+In clifra, the signature, selected grades, and action are explicit modeling
 choices rather than properties hidden inside a full multivector representation.
 
 ## Layout is part of the hypothesis
@@ -53,5 +50,4 @@ coordinates then depends on the operation or layer applied to that layout.
 
 For learned models, the layout therefore becomes part of the model hypothesis.
 Narrowing it can make the representation interpretable and computationally
-tractable, but it also excludes components. Clifra keeps this choice visible
-instead of silently embedding every object in a full $2^n$-lane multivector.
+tractable, but it also excludes components. clifra keeps this choice explicit.

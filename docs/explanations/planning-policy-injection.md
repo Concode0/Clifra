@@ -1,6 +1,6 @@
 # Planning Policies
 
-Clifra chooses execution routes during static planning. The choice depends on
+clifra chooses execution routes during static planning. The choice depends on
 the algebra specification, declared layouts, dtype, device, numerical options,
 and the injected planning policy. Tensor values and runtime batch dimensions do
 not participate in route selection.
@@ -121,9 +121,7 @@ storage grows as \(2^n\), so removing a lane cap transfers responsibility for
 that allocation to the caller; it does not make the representation scale
 linearly.
 
-The preflight pair count is conservative. It may reject from declared input
-widths before constructing every basis interaction. Grade, projection, and
-metric-zero filtering can make the realized plan smaller.
+The preflight pair count is conservative. It may reject a request based on declared input widths before constructing every basis interaction. Grade, projection, and metric-zero filtering can make the realized plan smaller.
 
 The same `planning_policy` and `resource_limits` arguments are available through
 `AlgebraConfig`, `make_algebra`, and `make_algebra_from_config`.
@@ -217,7 +215,7 @@ cache inputs before a policy can select it.
 ### PyTorch implementations
 
 An operation implemented directly with PyTorch tensor primitives must publish
-its own facts. Clifra cannot infer work, storage, or approximation guarantees
+its own facts. clifra cannot infer work, storage, or approximation guarantees
 from arbitrary tensor code.
 
 For each route:
@@ -239,7 +237,7 @@ Existing clifra calls plan and cache their own routes automatically. A function
 that calls a product followed by a bivector exponential therefore receives the
 selected child implementations without defining a new policy family.
 
-Clifra does not automatically combine those child facts into a parent cost. A
+clifra does not automatically combine those child facts into a parent cost. A
 parent planner must compose them explicitly when it:
 
 - compares more than one implementation of the composition;
