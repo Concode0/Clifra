@@ -6,7 +6,7 @@ The exponential of a bivector $B$ is the even multivector
 \exp(B) = \sum_{k=0}^{\infty}\frac{B^k}{k!}.
 \]
 
-Its occupied grades and the cost of evaluating it depend on the dimension, signature, and algebraic structure of $B$. Clifra selects a static executor from the algebra specification, layouts, dtype, device, and exponential policy.
+Its occupied grades and the cost of evaluating it depend on the dimension, signature, and algebraic structure of $B$. clifra selects a static executor from the algebra specification, layouts, dtype, device, and exponential policy.
 
 ## Finite closures
 
@@ -121,14 +121,13 @@ higher-dimensional case uses a matrix executor. A mixed positive/negative
 signature is currently a matrix case.
 
 The transition dimension and spectral limits are policy inputs. They determine
-the executor family during planning; the executor does not change families from
-runtime tensor values.
+the executor family during planning; runtime tensor values do not change the selected family.
 
 ## Coefficient evaluation near repeated roots
 
 The closed and spectral-local formulas contain removable limits and divided
 differences. Direct evaluation near a repeated root can subtract nearly equal
-values before dividing by a small invariant. Clifra uses a fixed Taylor
+values before dividing by a small invariant. clifra uses a fixed Taylor
 polynomial in that region.
 
 Let $u=\operatorname{finfo}(\text{dtype}).\mathrm{eps}$. If the first omitted
@@ -151,7 +150,7 @@ separate sources of error in the complete result.
 ## Truncation and diagnostics
 
 Let $|\theta_1|\geq\cdots\geq|\theta_M|$ be the plane-angle magnitudes and let
-$k$ be the retained plane count. Clifra reports two complementary summaries:
+$k$ be the retained plane count. clifra reports two complementary summaries:
 
 \[
 \operatorname{GVC}
@@ -189,7 +188,7 @@ the same retained-spectrum assumptions.
 
 ## Operating principles
 
-Clifra applies the following rules to bivector exponentiation:
+clifra applies the following rules to bivector exponentiation:
 
 1. **Plan statically.** Executor selection belongs to planning and is determined
    from structural inputs and policy, not inferred mathematical intent.

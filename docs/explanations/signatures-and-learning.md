@@ -117,8 +117,7 @@ by zero without certifying unit signed norm.
 
 For spectral-local bivector exponentiation, the backward pass is the derivative
 of the implemented local computation. Near repeated eigenvalues, a filtered
-eigendecomposition suppresses unstable inverse spectral gaps. If plane
-truncation occurs, both forward and backward belong to the truncated model.
+eigendecomposition suppresses unstable inverse spectral gaps. If plane truncation occurs, the forward computation is truncated and the backward pass differentiates that truncated computation.
 
 This remains a valid differentiable numerical method, but identities that
 depend on the exact full exponential must be validated to the required tolerance
