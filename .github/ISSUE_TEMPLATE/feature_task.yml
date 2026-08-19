@@ -28,4 +28,3 @@ body:
     attributes:
       label: API sketch or notes
       description: Optional code, math, links, or alternatives.
-      render: python

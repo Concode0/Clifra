@@ -12,7 +12,7 @@ body:
     attributes:
       label: What happened?
       description: One or two sentences are fine.
-      placeholder: "RotorLayer returns NaN in Cl(4,0) on CPU."
+      placeholder: "VersorLayer returns NaN in Cl(4,0) on CPU."
     validations:
       required: true
 
@@ -21,7 +21,7 @@ body:
     attributes:
       label: Where?
       description: Module, class, function, or file path if you know it.
-      placeholder: "clifra.layers.RotorLayer"
+      placeholder: "clifra.layers.VersorLayer"
 
   - type: input
     id: signature
@@ -37,9 +37,9 @@ body:
       render: python
       placeholder: |
         import torch
-        from clifra.core.config import make_algebra
+        from clifra import make_algebra
 
-        algebra = make_algebra(3, 0, kernel="dense", device="cpu")
+        algebra = make_algebra(3, 0, device="cpu")
         x = torch.randn(2, 1, algebra.dim)
     validations:
       required: true
