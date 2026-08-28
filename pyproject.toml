@@ -3,7 +3,7 @@ name = "clifra"
 version = "1.4.0"
 description = "A PyTorch framework for Clifford geometric algebra deep learning"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [
@@ -23,10 +23,9 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Scientific/Engineering :: Mathematics",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
     "setuptools",
@@ -68,7 +67,7 @@ default-groups = []
 include = ["clifra*"]
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py312"
 line-length = 120
 indent-width = 4
 extend-exclude = [
